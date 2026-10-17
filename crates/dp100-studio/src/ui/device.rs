@@ -11,24 +11,42 @@ use gtk::glib;
 use super::ctx::{Ctx, milli};
 use crate::worker::Action;
 
-/// Rows that follow the device until edited, with an Apply button that
-/// lights up on the first edit.
+/// Rows that follow the device until edited. Apply and Revert appear only
+/// once something has changed: these settings persist on the DP100, so
+/// they are sent deliberately rather than live.
 struct Form {
     apply: gtk::Button,
+    revert: gtk::Button,
+    bar: gtk::Revealer,
     syncing: Cell<bool>,
     dirty: Cell<bool>,
 }
 
 impl Form {
     fn new(tooltip: &str) -> Rc<Self> {
+        let apply = gtk::Button::builder()
+            .label("Apply")
+            .css_classes(["suggested-action"])
+            .valign(gtk::Align::Center)
+            .tooltip_text(tooltip)
+            .build();
+        let revert = gtk::Button::builder()
+            .label("Revert")
+            .css_classes(["flat"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Discard the edits and show the device's values again")
+            .build();
+        let buttons = gtk::Box::builder().spacing(6).build();
+        buttons.append(&revert);
+        buttons.append(&apply);
+        let bar = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::Crossfade)
+            .child(&buttons)
+            .build();
         Rc::new(Self {
-            apply: gtk::Button::builder()
-                .label("Apply")
-                .css_classes(["suggested-action"])
-                .valign(gtk::Align::Center)
-                .sensitive(false)
-                .tooltip_text(tooltip)
-                .build(),
+            apply,
+            revert,
+            bar,
             syncing: Cell::new(false),
             dirty: Cell::new(false),
         })
@@ -42,7 +60,7 @@ impl Form {
                     && !f.syncing.get()
                 {
                     f.dirty.set(true);
-                    f.apply.set_sensitive(true);
+                    f.bar.set_reveal_child(true);
                 }
             });
     }
@@ -59,7 +77,7 @@ impl Form {
 
     fn applied(&self) {
         self.dirty.set(false);
-        self.apply.set_sensitive(false);
+        self.bar.set_reveal_child(false);
     }
 }
 
@@ -113,7 +131,7 @@ impl Device {
                 "Trips for the active preset. The output shuts off if it goes past \
                  them. Saved to the preset and applied at once.",
             )
-            .header_suffix(&protection.apply)
+            .header_suffix(&protection.bar)
             .build();
         let ovp = spin("Over-voltage trip (V)", "", 0.0, 30.5, 0.01, 2);
         let ocp = spin("Over-current trip (A)", "", 0.0, 5.05, 0.001, 3);
@@ -124,7 +142,7 @@ impl Device {
         let system = Form::new("Save these settings to the DP100.");
         let sg = adw::PreferencesGroup::builder()
             .title("Settings")
-            .header_suffix(&system.apply)
+            .header_suffix(&system.bar)
             .build();
         let otp = spin("Over-temperature trip (°C)", "", 50.0, 80.0, 1.0, 0);
         let opp = spin("Over-power trip (W)", "", 1.0, 105.0, 0.1, 1);
@@ -189,6 +207,26 @@ impl Device {
         d.protection.apply.connect_clicked(move |_| {
             if let Some(d) = w.upgrade() {
                 d.apply_protection();
+            }
+        });
+        let w = Rc::downgrade(&d);
+        d.protection.revert.connect_clicked(move |_| {
+            if let Some(d) = w.upgrade() {
+                d.protection.applied();
+                let o = d.ctx.live.borrow().output;
+                if let Some(o) = o {
+                    d.show_output(&o);
+                }
+            }
+        });
+        let w = Rc::downgrade(&d);
+        d.system.revert.connect_clicked(move |_| {
+            if let Some(d) = w.upgrade() {
+                d.system.applied();
+                let s = d.ctx.live.borrow().system;
+                if let Some(s) = s {
+                    d.show_system(&s);
+                }
             }
         });
         let w = Rc::downgrade(&d);

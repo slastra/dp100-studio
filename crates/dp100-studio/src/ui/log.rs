@@ -50,12 +50,13 @@ fn thousands(n: u64) -> String {
 pub struct Log {
     pub root: adw::PreferencesPage,
     record: gtk::Button,
+    record_content: adw::ButtonContent,
     rate: adw::ComboRow,
     status: adw::ActionRow,
     file: adw::ActionRow,
-    energy: adw::ActionRow,
-    charge: adw::ActionRow,
-    covered: adw::ActionRow,
+    energy: gtk::Label,
+    charge: gtk::Label,
+    covered: gtk::Label,
     recording: Cell<bool>,
     last_file: RefCell<Option<PathBuf>>,
     ctx: Rc<Ctx>,
@@ -65,11 +66,63 @@ impl Log {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
         let root = adw::PreferencesPage::new();
 
-        let record = gtk::Button::builder()
+        let record_content = adw::ButtonContent::builder()
+            .icon_name("media-record-symbolic")
             .label("Record")
-            .css_classes(["suggested-action"])
+            .build();
+        let record = gtk::Button::builder()
+            .child(&record_content)
+            .css_classes(["pill", "record-button"])
             .valign(gtk::Align::Center)
             .build();
+        // What has been delivered, as big figures, first: it is what the
+        // page is most often opened for.
+        let reset = gtk::Button::builder()
+            .label("Reset")
+            .css_classes(["flat"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Start counting again from zero")
+            .build();
+        let eg = adw::PreferencesGroup::builder()
+            .title("Delivered")
+            .description(
+                "Integrated from the measurements since connecting, or since the last reset.",
+            )
+            .header_suffix(&reset)
+            .build();
+        let tiles = gtk::Box::builder()
+            .spacing(12)
+            .homogeneous(true)
+            .css_classes(["card", "tiles"])
+            .build();
+        let tile = |caption: &str, class: &str| {
+            let b = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .css_classes(["tile", class])
+                .build();
+            b.append(
+                &gtk::Label::builder()
+                    .label(caption)
+                    .css_classes(["stat-caption"])
+                    .xalign(0.0)
+                    .build(),
+            );
+            let v = gtk::Label::builder()
+                .label("--")
+                .css_classes(["tile-value", "numeric"])
+                .xalign(0.0)
+                .build();
+            b.append(&v);
+            tiles.append(&b);
+            v
+        };
+        let energy = tile("ENERGY", "watt");
+        let charge = tile("CHARGE", "amp");
+        let covered = tile("MEASURED FOR", "time");
+        eg.add(&tiles);
+        root.add(&eg);
+
         let rg = adw::PreferencesGroup::builder()
             .title("Recording")
             .description(format!(
@@ -111,35 +164,10 @@ impl Log {
         rg.add(&file);
         root.add(&rg);
 
-        let reset = gtk::Button::builder()
-            .label("Reset")
-            .valign(gtk::Align::Center)
-            .tooltip_text("Start counting again from zero")
-            .build();
-        let eg = adw::PreferencesGroup::builder()
-            .title("Delivered")
-            .description(
-                "Integrated from the measurements since connecting, or since the last reset.",
-            )
-            .header_suffix(&reset)
-            .build();
-        let row = |title: &str| {
-            let r = adw::ActionRow::builder()
-                .title(title)
-                .subtitle("--")
-                .css_classes(["property"])
-                .build();
-            eg.add(&r);
-            r
-        };
-        let energy = row("Energy");
-        let charge = row("Charge");
-        let covered = row("Measured for");
-        root.add(&eg);
-
         let l = Rc::new(Self {
             root,
             record,
+            record_content,
             rate,
             status,
             file,
@@ -199,27 +227,29 @@ impl Log {
         }
         self.rate.set_sensitive(!on);
         if on {
-            self.record.set_label("Stop");
-            self.record.remove_css_class("suggested-action");
-            self.record.add_css_class("destructive-action");
+            self.record_content.set_label("Stop");
+            self.record_content
+                .set_icon_name("media-playback-stop-symbolic");
+            self.record.add_css_class("recording");
         } else {
-            self.record.set_label("Record");
-            self.record.remove_css_class("destructive-action");
-            self.record.add_css_class("suggested-action");
+            self.record_content.set_label("Record");
+            self.record_content.set_icon_name("media-record-symbolic");
+            self.record.remove_css_class("recording");
             self.status.set_subtitle("Not recording");
         }
     }
 
     pub fn show_energy(&self, mwh: f64, mah: f64, covered: Duration, gaps: u32) {
-        self.energy.set_subtitle(&energy(mwh));
-        self.charge.set_subtitle(&charge(mah));
+        self.energy.set_label(&energy(mwh));
+        self.charge.set_label(&charge(mah));
         let gaps = match gaps {
             0 => String::new(),
             1 => " (1 gap not counted)".into(),
             n => format!(" ({n} gaps not counted)"),
         };
+        self.covered.set_label(&clock(covered));
         self.covered
-            .set_subtitle(&format!("{}{gaps}", clock(covered)));
+            .set_tooltip_text((!gaps.is_empty()).then_some(gaps.trim()));
     }
 
     pub fn show_recording(&self, r: &RecordingStatus) {

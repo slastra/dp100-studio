@@ -9,8 +9,8 @@
 #
 # e.g. scripts/shot.sh /tmp/sim.png 600x820 --simulate
 #
-# The app gets a private runtime, config and state directory, so nothing it
-# remembers leaks into your real profile. Set SHOT_DELAY (seconds, default 3)
+# The app gets a private runtime, config, state and data directory, so
+# nothing it remembers leaks into your real profile. Set SHOT_DELAY (seconds, default 3)
 # to let the readouts settle before the capture, and SHOT_POINTER="X Y" to
 # move a virtual pointer there first (for hover states).
 set -u
@@ -24,7 +24,9 @@ cd "$(dirname "$0")/.." || exit 1
 # sun_path caps at 108 bytes, so the runtime dir must be short.
 RT=/tmp/dps.$$
 mkdir -p "$RT"/{config,state,data} && chmod 700 "$RT"
-trap 'kill $APP $SWAY 2>/dev/null; wait 2>/dev/null; rm -rf "$RT"' EXIT
+# The app runs under dbus-run-session, so stop it through its parent's pid:
+# matching it by name would also hit a DP100 Studio you have open.
+trap 'pkill -TERM -P "${APP:-0}" 2>/dev/null; sleep 0.3; kill $APP $SWAY 2>/dev/null; wait 2>/dev/null; rm -rf "$RT"' EXIT
 
 cat > "$RT/sway.conf" <<CONF
 default_border none
@@ -54,9 +56,15 @@ done
 [ -n "${SOCK:-}" ] || { echo "sway did not start:" >&2; cat "$RT/sway.log" >&2; exit 1; }
 DISP=$(basename "$SOCK")
 
+# A simulated run has its own app id, so it can share your session bus (and
+# with it your theme and fonts, through the settings portal). A hardware run
+# would collide with a DP100 Studio you have open, so it gets a private bus,
+# and stock Adwaita styling with it.
+WRAP=
+case " $* " in *" --simulate "*) ;; *) WRAP="dbus-run-session --" ;; esac
 env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" GDK_BACKEND=wayland \
     XDG_CONFIG_HOME="$RT/config" XDG_STATE_HOME="$RT/state" XDG_DATA_HOME="$RT/data" \
-    "$BIN" "$@" >"$RT/app.log" 2>&1 &
+    $WRAP "$BIN" "$@" >"$RT/app.log" 2>&1 &
 APP=$!
 sleep "${SHOT_DELAY:-3}"
 # wlrctl only moves relative to the cursor, which sway starts in the middle

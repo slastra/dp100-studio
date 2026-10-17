@@ -9,16 +9,86 @@ use dp100::Setpoints;
 use super::ctx::{Ctx, amps, milli, volts};
 use crate::worker::Action;
 
-struct Row {
-    row: adw::ActionRow,
+/// One preset, drawn as a memory card: its slot number, the setpoint in
+/// large figures, the trips beneath, and Use and Edit.
+struct Card {
+    root: gtk::Box,
+    volts: gtk::Label,
+    amps: gtk::Label,
+    trips: gtk::Label,
     active: gtk::Label,
     activate: gtk::Button,
     edit: gtk::Button,
 }
 
+impl Card {
+    fn new(n: u8) -> Self {
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["card", "preset-card"])
+            .build();
+        let head = gtk::Box::builder().spacing(6).build();
+        head.append(
+            &gtk::Label::builder()
+                .label(format!("M{n}"))
+                .css_classes(["preset-slot"])
+                .build(),
+        );
+        let active = gtk::Label::builder()
+            .label("ACTIVE")
+            .css_classes(["active-tag"])
+            .hexpand(true)
+            .halign(gtk::Align::End)
+            .visible(false)
+            .build();
+        head.append(&active);
+        root.append(&head);
+
+        let num = |classes: &[&str]| {
+            gtk::Label::builder()
+                .label("--")
+                .css_classes(classes.to_vec())
+                .xalign(0.0)
+                .build()
+        };
+        let volts = num(&["preset-volts", "numeric"]);
+        let amps = num(&["preset-amps", "numeric"]);
+        let trips = num(&["preset-trips", "numeric", "dim-label"]);
+        root.append(&volts);
+        root.append(&amps);
+        root.append(&trips);
+
+        let buttons = gtk::Box::builder().spacing(6).margin_top(8).build();
+        let activate = gtk::Button::builder()
+            .label("Use")
+            .hexpand(true)
+            .css_classes(["pill", "small-pill"])
+            .tooltip_text(format!("Make preset {n} the active preset"))
+            .build();
+        let edit = gtk::Button::builder()
+            .icon_name("document-edit-symbolic")
+            .css_classes(["flat", "circular"])
+            .tooltip_text(format!("Edit preset {n}"))
+            .build();
+        buttons.append(&activate);
+        buttons.append(&edit);
+        root.append(&buttons);
+        Self {
+            root,
+            volts,
+            amps,
+            trips,
+            active,
+            activate,
+            edit,
+        }
+    }
+}
+
 pub struct Presets {
     pub root: adw::PreferencesPage,
-    rows: Vec<Row>,
+    rows: Vec<Card>,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
@@ -35,41 +105,21 @@ impl Presets {
             .build();
         root.add(&group);
 
+        let grid = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .homogeneous(true)
+            .min_children_per_line(1)
+            .max_children_per_line(3)
+            .column_spacing(12)
+            .row_spacing(12)
+            .build();
         let mut rows = Vec::new();
         for n in 1..=9u8 {
-            let row = adw::ActionRow::builder()
-                .title(format!("Preset {n}"))
-                .subtitle("--")
-                .subtitle_selectable(true)
-                .build();
-            let active = gtk::Label::builder()
-                .label("Active")
-                .css_classes(["active-tag"])
-                .valign(gtk::Align::Center)
-                .visible(false)
-                .build();
-            let activate = gtk::Button::builder()
-                .label("Use")
-                .valign(gtk::Align::Center)
-                .tooltip_text(format!("Make preset {n} the active preset"))
-                .build();
-            let edit = gtk::Button::builder()
-                .icon_name("document-edit-symbolic")
-                .css_classes(["flat"])
-                .valign(gtk::Align::Center)
-                .tooltip_text(format!("Edit preset {n}"))
-                .build();
-            row.add_suffix(&active);
-            row.add_suffix(&activate);
-            row.add_suffix(&edit);
-            group.add(&row);
-            rows.push(Row {
-                row,
-                active,
-                activate,
-                edit,
-            });
+            let card = Card::new(n);
+            grid.append(&card.root);
+            rows.push(card);
         }
+        group.add(&grid);
 
         let p = Rc::new(Self {
             root,
@@ -163,14 +213,12 @@ impl Presets {
     }
 
     pub fn show_presets(&self, presets: &[Setpoints]) {
-        for (r, p) in self.rows.iter().zip(presets) {
-            r.row.set_subtitle(&format!(
-                "{} · {}   (OVP {} · OCP {})",
-                volts(p.vset_mv),
-                amps(p.iset_ma),
-                volts(p.ovp_mv),
-                amps(p.ocp_ma)
-            ));
+        for (c, p) in self.rows.iter().zip(presets) {
+            c.volts
+                .set_label(&format!("{:.2} V", f64::from(p.vset_mv) / 1000.0));
+            c.amps.set_label(&amps(p.iset_ma));
+            c.trips
+                .set_label(&format!("OVP {} · OCP {}", volts(p.ovp_mv), amps(p.ocp_ma)));
         }
     }
 
@@ -178,14 +226,20 @@ impl Presets {
         if self.active.replace(index) == index && index != 0 {
             return;
         }
-        for (k, r) in self.rows.iter().enumerate() {
+        for (k, c) in self.rows.iter().enumerate() {
             let is = k as u8 + 1 == index;
-            r.active.set_visible(is);
-            r.activate.set_visible(!is);
+            c.active.set_visible(is);
+            c.activate.set_sensitive(!is);
+            c.activate.set_label(if is { "In use" } else { "Use" });
+            if is {
+                c.root.add_css_class("active");
+            } else {
+                c.root.remove_css_class("active");
+            }
             // The firmware won't take a save to the preset in use; its
             // values are changed live from the Monitor and Device pages.
-            r.edit.set_sensitive(!is);
-            r.edit.set_tooltip_text(Some(&if is {
+            c.edit.set_sensitive(!is);
+            c.edit.set_tooltip_text(Some(&if is {
                 "This preset is active. Change its setpoints on the Monitor page and its trips on the Device page.".to_owned()
             } else {
                 format!("Edit preset {}", k + 1)
