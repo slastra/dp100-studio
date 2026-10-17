@@ -233,7 +233,7 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
         }
 
         tick = tick.wrapping_add(1);
-        if tick % OUTPUT_EVERY == 0 {
+        if tick.is_multiple_of(OUTPUT_EVERY) {
             match dev.output() {
                 Ok(o) => out.send(Event::Output(o)),
                 Err(e) if e.is_transient() => {}
