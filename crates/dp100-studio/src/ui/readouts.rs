@@ -123,12 +123,19 @@ fn segment(label: &str) -> gtk::ToggleButton {
 /// The graph with its window, lane and pause controls above it. Returns the
 /// section, the control bar and the lane toggles, which a narrow window
 /// stacks.
-fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
+fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
         .build();
-    let bar = gtk::Box::builder().spacing(12).build();
+    // The two halves wrap rather than hold one long row: a page whose
+    // content can't get narrow is clamped wider than the others.
+    let bar = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .max_children_per_line(2)
+        .column_spacing(12)
+        .row_spacing(8)
+        .build();
 
     let windows = segmented();
     let mut first: Option<gtk::ToggleButton> = None;
@@ -148,7 +155,8 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
         });
         windows.append(&b);
     }
-    bar.append(&windows);
+    windows.set_halign(gtk::Align::Start);
+    super::panel::add_to_flow(&bar, &windows);
 
     // Lane toggles and pause stay together, so a narrow window can move
     // them under the time windows as one row.
@@ -186,7 +194,7 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
         });
     });
     right.append(&pause);
-    bar.append(&right);
+    super::panel::add_to_flow(&bar, &right);
 
     section.append(&bar);
     let frame = gtk::Box::builder()
@@ -213,7 +221,7 @@ pub struct Readouts {
     pub root: adw::PreferencesPage,
     panel: Panel,
     channels: gtk::Box,
-    graph_bar: gtk::Box,
+    graph_bar: gtk::FlowBox,
     lane_toggles: gtk::Box,
     controls: Rc<Controls>,
     graph: Graph,
@@ -312,7 +320,11 @@ impl Readouts {
             .narrow_layout(bp, Some(self.controls.toggle.upcast_ref()));
         bp.add_setter(&self.channels, "orientation", Some(&vertical));
         bp.add_setter(&self.channels, "spacing", Some(&18.to_value()));
-        bp.add_setter(&self.graph_bar, "orientation", Some(&vertical));
+        bp.add_setter(
+            &self.graph_bar,
+            "max-children-per-line",
+            Some(&1u32.to_value()),
+        );
         bp.add_setter(
             &self.lane_toggles,
             "halign",
