@@ -22,12 +22,16 @@ mod error;
 pub mod frame;
 mod hidraw;
 pub mod op;
+#[cfg(feature = "sim")]
+pub mod sim;
 mod transport;
 pub mod types;
 
-pub use clock::{Clock, SystemClock};
+pub use clock::{Clock, ManualClock, SystemClock};
 pub use crc::crc16;
-pub use device::{Device, MAX_CURRENT_MA, MAX_VOLTAGE_MV, Options};
+pub use device::{
+    Activated, Device, MAX_CURRENT_MA, MAX_OCP_MA, MAX_OVP_MV, MAX_VOLTAGE_MV, Options,
+};
 pub use error::{Error, Result};
 pub use frame::{Frame, FrameError};
 pub use hidraw::HidrawTransport;

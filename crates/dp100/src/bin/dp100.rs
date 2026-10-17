@@ -20,8 +20,16 @@ commands:
   set [-v VOLTS] [-i AMPS]   change setpoints; output on/off is left alone
   on [--yes]                 enable the output (asks first)
   off                        disable the output
+  protect [--ovp VOLTS] [--ocp AMPS]
+                             change the live protection trips
+  clear                      clear a latched protection trip (output goes off)
   preset N                   show stored preset N (0-9)
+  preset save N [-v VOLTS] [-i AMPS] [--ovp VOLTS] [--ocp AMPS]
+                             store preset N (1-9); unset fields keep their value
+  preset use N [--yes]       make preset N (1-9) active; output ends off
   system                     protection and panel settings
+  system set [--otp C] [--opp WATTS] [--backlight 0-4] [--volume 0-4]
+             [--rpp on|off] [--auto-on on|off]
   raw OP [BYTE...]           send one request, print the reply (hex)
 ";
 
@@ -191,11 +199,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_setpoints(&dev.set_output(true)?);
         }
         "off" => print_setpoints(&open()?.set_output(false)?),
+        "protect" => {
+            let (mut ovp, mut ocp) = (None, None);
+            while let Some(arg) = parser.next()? {
+                match arg {
+                    Long("ovp") => ovp = Some(to_milli(parser.value()?.parse()?)?),
+                    Long("ocp") => ocp = Some(to_milli(parser.value()?.parse()?)?),
+                    other => return Err(other.unexpected().into()),
+                }
+            }
+            if ovp.is_none() && ocp.is_none() {
+                return Err("protect needs --ovp and/or --ocp".into());
+            }
+            let mut dev = open()?;
+            let cur = dev.output()?;
+            let o = dev.set_protection(ovp.unwrap_or(cur.ovp_mv), ocp.unwrap_or(cur.ocp_ma))?;
+            print_setpoints(&o);
+        }
+        "clear" => {
+            let b = open()?.clear_fault()?;
+            println!("fault {}", b.fault.label());
+        }
         "preset" => {
-            let n: u8 = parser.value()?.parse()?;
-            print_setpoints(&open()?.preset(n)?);
+            let arg = parser.value()?.string()?;
+            match arg.as_str() {
+                "save" => preset_save(&mut parser, &open)?,
+                "use" => preset_use(&mut parser, &open)?,
+                n => print_setpoints(&open()?.preset(n.parse()?)?),
+            }
         }
         "system" => {
+            if let Some(Value(v)) = parser.next()? {
+                if v != "set" {
+                    return Err(format!("unknown system command '{}'", v.to_string_lossy()).into());
+                }
+                system_set(&mut parser, &open)?;
+            }
             let s = open()?.system()?;
             let opt = |b: Option<bool>| match b {
                 Some(true) => "on",
@@ -220,6 +259,111 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         other => return Err(format!("unknown command '{other}' (try --help)").into()),
     }
+    Ok(())
+}
+
+fn preset_save(
+    parser: &mut lexopt::Parser,
+    open: &dyn Fn() -> dp100::Result<Dev>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use lexopt::prelude::*;
+    let n: u8 = parser.value()?.parse()?;
+    let (mut v, mut i, mut ovp, mut ocp) = (None, None, None, None);
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Short('v') | Long("voltage") => v = Some(to_milli(parser.value()?.parse()?)?),
+            Short('i') | Long("current") => i = Some(to_milli(parser.value()?.parse()?)?),
+            Long("ovp") => ovp = Some(to_milli(parser.value()?.parse()?)?),
+            Long("ocp") => ocp = Some(to_milli(parser.value()?.parse()?)?),
+            other => return Err(other.unexpected().into()),
+        }
+    }
+    let mut dev = open()?;
+    let cur = dev.preset(n)?;
+    let want = Setpoints {
+        vset_mv: v.unwrap_or(cur.vset_mv),
+        iset_ma: i.unwrap_or(cur.iset_ma),
+        ovp_mv: ovp.unwrap_or(cur.ovp_mv),
+        ocp_ma: ocp.unwrap_or(cur.ocp_ma),
+        ..cur
+    };
+    print_setpoints(&dev.save_preset(n, &want)?);
+    Ok(())
+}
+
+fn preset_use(
+    parser: &mut lexopt::Parser,
+    open: &dyn Fn() -> dp100::Result<Dev>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use lexopt::prelude::*;
+    let n: u8 = parser.value()?.parse()?;
+    let mut yes = false;
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("yes") | Short('y') => yes = true,
+            other => return Err(other.unexpected().into()),
+        }
+    }
+    let mut dev = open()?;
+    let cur = dev.output()?;
+    if cur.index == 0 && !yes {
+        // The preset-0 firmware bug can switch the output on for a moment.
+        let p = dev.preset(n)?;
+        let prompt = format!(
+            "Switching away from preset 0 can briefly enable the output at preset {n}'s \
+             {} V / {} A before it is turned off again. Continue? [y/N] ",
+            milli(p.vset_mv, 2),
+            milli(p.iset_ma, 3)
+        );
+        if !confirm(&prompt)? {
+            return Err("not confirmed".into());
+        }
+    }
+    let a = dev.activate_preset(n)?;
+    if a.forced_off {
+        println!("note: the firmware enabled the output during the switch; it was turned off");
+    }
+    if a.was_on {
+        println!("note: output was on and has been turned off");
+    }
+    print_setpoints(&a.output);
+    Ok(())
+}
+
+fn system_set(
+    parser: &mut lexopt::Parser,
+    open: &dyn Fn() -> dp100::Result<Dev>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use lexopt::prelude::*;
+    let mut dev = open()?;
+    let mut s = dev.system()?;
+    let on_off = |v: String| -> Result<bool, String> {
+        match v.as_str() {
+            "on" | "1" | "true" => Ok(true),
+            "off" | "0" | "false" => Ok(false),
+            _ => Err(format!("expected on or off, got '{v}'")),
+        }
+    };
+    let mut any = false;
+    while let Some(arg) = parser.next()? {
+        any = true;
+        match arg {
+            Long("otp") => s.otp_c = parser.value()?.parse()?,
+            Long("opp") => {
+                let w: f64 = parser.value()?.parse()?;
+                s.opp_dw = (w * 10.0).round() as u16;
+            }
+            Long("backlight") => s.backlight = parser.value()?.parse()?,
+            Long("volume") => s.volume = parser.value()?.parse()?,
+            Long("rpp") => s.reverse_protect = Some(on_off(parser.value()?.string()?)?),
+            Long("auto-on") => s.auto_on = Some(on_off(parser.value()?.string()?)?),
+            other => return Err(other.unexpected().into()),
+        }
+    }
+    if !any {
+        return Err("system set needs at least one option".into());
+    }
+    dev.set_system(&s)?;
     Ok(())
 }
 

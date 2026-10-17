@@ -29,6 +29,15 @@ pub mod sub {
     pub const fn set_live(n: u8) -> u8 {
         0x20 | (n & 0x0F)
     }
+    /// Store preset `n` to flash.
+    ///
+    /// Two candidates exist: `0x40|n`, seen in USB captures of the official
+    /// software, and `0x60|n`, from a decompile of its DLL. Experiment E3 in
+    /// `docs/PROTOCOL.md` settles which one the firmware honours; until then
+    /// this is the captured one.
+    pub const fn save_preset(n: u8) -> u8 {
+        0x40 | (n & 0x0F)
+    }
     /// Make preset `n` the active one. Sent with a full 10-byte payload, zeros
     /// after the first byte.
     pub const fn activate(n: u8) -> u8 {

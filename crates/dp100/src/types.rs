@@ -274,6 +274,21 @@ impl SystemSettings {
             auto_on: ext.then(|| d[7] != 0),
         })
     }
+
+    /// The write payload: 8 bytes, or 6 when the firmware predates the last
+    /// two fields.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut d = Vec::with_capacity(8);
+        d.extend_from_slice(&self.otp_c.to_le_bytes());
+        d.extend_from_slice(&self.opp_dw.to_le_bytes());
+        d.push(self.backlight);
+        d.push(self.volume);
+        if let (Some(rpp), Some(auto)) = (self.reverse_protect, self.auto_on) {
+            d.push(u8::from(rpp));
+            d.push(u8::from(auto));
+        }
+        d
+    }
 }
 
 /// Formats millivolts or milliamps as a decimal of the base unit.
@@ -345,6 +360,7 @@ mod tests {
         assert_eq!((s.backlight, s.volume), (2, 2));
         assert_eq!(s.reverse_protect, Some(true));
         assert_eq!(s.auto_on, Some(false));
+        assert_eq!(s.encode(), hex("50 00 1a 04 02 02 01 00"));
     }
 
     #[test]

@@ -34,6 +34,14 @@ pub enum Error {
         value: u32,
         max: u32,
     },
+    #[error("{field} {value} is below the setpoint {setpoint} and would trip at once")]
+    BelowSetpoint {
+        field: &'static str,
+        value: u32,
+        setpoint: u32,
+    },
+    #[error("preset {0} is active; switch to another preset before changing it")]
+    PresetInUse(u8),
     #[error(transparent)]
     Io(#[from] io::Error),
 }

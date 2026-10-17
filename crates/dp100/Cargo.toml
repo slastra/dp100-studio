@@ -16,6 +16,9 @@ default = []
 # The `dp100` command-line tool. Off by default so library users don't pull
 # in argument parsing.
 cli = ["dep:lexopt"]
+# A software DP100 behind the Transport trait, for tests and for running the
+# app without hardware.
+sim = []
 
 [dependencies]
 # hidraw is a plain character device: open, poll, read, write. rustix gives us
@@ -27,6 +30,10 @@ lexopt = { version = "0.3", optional = true }
 [[bin]]
 name = "dp100"
 required-features = ["cli"]
+
+[[test]]
+name = "device_sim"
+required-features = ["sim"]
 
 [lints]
 workspace = true
