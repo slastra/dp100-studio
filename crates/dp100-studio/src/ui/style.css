@@ -194,7 +194,6 @@ button.power-button.on {
 
 /* ---- header chips ------------------------------------------------------ */
 
-.output-chip,
 .recording-chip,
 button.sequence-chip {
   min-height: 0;
@@ -205,10 +204,6 @@ button.sequence-chip {
   letter-spacing: 0.06em;
 }
 
-.output-chip {
-  background: @error_bg_color;
-  color: @error_fg_color;
-}
 
 .recording-chip {
   color: @error_color;

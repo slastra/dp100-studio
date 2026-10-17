@@ -58,7 +58,6 @@ struct Window {
     switcher: adw::ViewSwitcher,
     switcher_bar: adw::ViewSwitcherBar,
     views: adw::ViewStack,
-    output_chip: gtk::Label,
     recording_chip: gtk::Label,
     sequence_chip: gtk::Button,
     /// The device pages are showing (not the status page).
@@ -243,13 +242,6 @@ fn build(
     let title = adw::WindowTitle::new("DP100 Studio", "");
     let header = adw::HeaderBar::builder().title_widget(&title).build();
 
-    let output_chip = gtk::Label::builder()
-        .label("OUTPUT ON")
-        .css_classes(["output-chip"])
-        .tooltip_text("Press F9 to turn the output off")
-        .visible(false)
-        .build();
-    header.pack_start(&output_chip);
     let recording_chip = gtk::Label::builder()
         .label("REC")
         .css_classes(["recording-chip"])
@@ -364,7 +356,6 @@ fn build(
         switcher,
         switcher_bar,
         views,
-        output_chip,
         recording_chip,
         sequence_chip,
         connected: std::cell::Cell::new(false),
@@ -388,7 +379,6 @@ impl Window {
         self.status.set_title(title);
         self.status.set_description(Some(description));
         self.reconnect.set_visible(false);
-        self.output_chip.set_visible(false);
         self.set_banner(None, false);
         self.title
             .set_subtitle(if self.simulated { "Simulated" } else { "" });
@@ -455,7 +445,6 @@ impl Window {
                 let m = s.m;
                 self.ctx.live.borrow_mut().sample = Some(m);
                 self.readouts.show_sample(s.at, &m);
-                self.output_chip.set_visible(m.output_on().unwrap_or(false));
                 if m.fault != Fault::Ok {
                     self.set_banner(
                         Some(&format!(
