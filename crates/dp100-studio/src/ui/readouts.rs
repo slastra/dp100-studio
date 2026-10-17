@@ -1,5 +1,10 @@
-//! The Monitor page: big output figures, the controls, the graph, and the
-//! details beneath.
+//! The Monitor page.
+//!
+//! Laid out like the front of a bench instrument: a panel of annunciator
+//! lamps and the power switch, two big channel readouts (voltage and
+//! current) each with a bar showing how close it sits to its setpoint, and
+//! a quiet footer of secondary figures. The setpoint editor and the graph
+//! follow, then the details.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -17,50 +22,78 @@ use super::log::{charge, energy};
 /// labels repainting at 100 Hz while recording would only cost power.
 const LABEL_INTERVAL: Duration = Duration::from_millis(50);
 
-fn celsius(dc: i16) -> String {
-    format!("{:.1} °C", f64::from(dc) / 10.0)
+fn label(text: &str, classes: &[&str]) -> gtk::Label {
+    gtk::Label::builder()
+        .label(text)
+        .css_classes(classes.to_vec())
+        .xalign(0.0)
+        .build()
 }
 
-/// One large figure with a caption.
-struct Figure {
+/// One big channel readout: caption, value and unit, a headroom bar, and a
+/// line saying what it is being held to.
+struct Channel {
     value: gtk::Label,
+    bar: gtk::ProgressBar,
+    note: gtk::Label,
 }
 
-impl Figure {
-    fn new(caption: &str, class: &str) -> (Self, gtk::Box) {
+impl Channel {
+    fn new(caption: &str, unit: &str, class: &str) -> (Self, gtk::Box) {
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
+            .spacing(4)
             .hexpand(true)
-            .css_classes(["card", "figure", class])
+            .css_classes(["channel", class])
             .build();
+        b.append(&label(caption, &["channel-caption"]));
+        let line = gtk::Box::builder().spacing(6).build();
         let value = gtk::Label::builder()
             .label("--")
-            .css_classes(["figure-value", "numeric"])
-            .xalign(0.0)
+            .css_classes(["reading", "numeric"])
+            .valign(gtk::Align::BaselineFill)
             .build();
-        let cap = gtk::Label::builder()
-            .label(caption)
-            .css_classes(["caption", "dim-label"])
-            .xalign(0.0)
+        let unit = gtk::Label::builder()
+            .label(unit)
+            .css_classes(["reading-unit"])
+            .valign(gtk::Align::BaselineFill)
             .build();
-        b.append(&cap);
-        b.append(&value);
-        (Self { value }, b)
+        line.append(&value);
+        line.append(&unit);
+        b.append(&line);
+        let bar = gtk::ProgressBar::builder()
+            .css_classes(["headroom", class])
+            .build();
+        b.append(&bar);
+        let note = label("", &["channel-note", "numeric"]);
+        b.append(&note);
+        (Self { value, bar, note }, b)
     }
 }
 
-/// An `AdwActionRow` whose suffix label is updated in place.
-fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
-    let value = gtk::Label::builder()
-        .css_classes(["numeric"])
-        .selectable(true)
+/// A small secondary figure for the panel footer.
+fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
+    let b = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
         .build();
-    let r = adw::ActionRow::builder().title(title).build();
-    r.add_suffix(&value);
-    group.add(&r);
-    value
+    b.append(&label(caption, &["stat-caption"]));
+    let v = label("--", &["stat-value", "numeric"]);
+    b.append(&v);
+    (v, b)
 }
+
+/// The panel's status lamps, in the order a front panel would print them.
+const LAMPS: [(&str, &str); 7] = [
+    ("CV", "Regulating voltage"),
+    ("CC", "Limiting current"),
+    ("OUT", "Output on"),
+    ("OVP", "Over-voltage trip"),
+    ("OCP", "Over-current trip"),
+    ("OPP", "Over-power trip"),
+    ("OTP", "Over-temperature trip"),
+];
 
 /// The time windows offered, in seconds.
 const WINDOWS: [(&str, f64); 6] = [
@@ -72,22 +105,35 @@ const WINDOWS: [(&str, f64); 6] = [
     ("1 h", 3600.0),
 ];
 
-/// The graph with its window, lane and pause controls above it.
-fn graph_section(graph: &Graph) -> gtk::Box {
+/// A row of toggle buttons drawn as one segmented control. Clicking one
+/// doesn't take keyboard focus, so no focus ring is left behind; Tab still
+/// reaches them.
+fn segmented() -> gtk::Box {
+    gtk::Box::builder().css_classes(["segmented"]).build()
+}
+
+fn segment(label: &str) -> gtk::ToggleButton {
+    gtk::ToggleButton::builder()
+        .label(label)
+        .focus_on_click(false)
+        .build()
+}
+
+/// The graph with its window, lane and pause controls above it. Returns the
+/// section, the control bar and the lane toggles, which a narrow window
+/// stacks.
+fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
+        .spacing(8)
         .build();
     let bar = gtk::Box::builder().spacing(12).build();
 
-    let windows = gtk::Box::builder().css_classes(["linked"]).build();
+    let windows = segmented();
     let mut first: Option<gtk::ToggleButton> = None;
-    for (label, secs) in WINDOWS {
-        let b = gtk::ToggleButton::builder()
-            .label(label)
-            .css_classes(["flat", "small"])
-            .active(secs == 30.0)
-            .build();
+    for (text, secs) in WINDOWS {
+        let b = segment(text);
+        b.set_active(secs == 30.0);
         if let Some(f) = &first {
             b.set_group(Some(f));
         } else {
@@ -103,32 +149,42 @@ fn graph_section(graph: &Graph) -> gtk::Box {
     }
     bar.append(&windows);
 
-    let lanes = gtk::Box::builder()
-        .css_classes(["linked"])
+    // Lane toggles and pause stay together, so a narrow window can move
+    // them under the time windows as one row.
+    let right = gtk::Box::builder()
+        .spacing(12)
         .hexpand(true)
         .halign(gtk::Align::End)
         .build();
+    let lanes = segmented();
     for lane in Lane::ALL {
-        let b = gtk::ToggleButton::builder()
-            .label(lane.short())
-            .tooltip_text(format!("Show {}", lane.name().to_lowercase()))
-            .css_classes(["flat", "small", "lane-toggle"])
-            .active(graph.lane_shown(lane))
-            .build();
+        let b = segment(lane.short());
+        b.add_css_class(lane.css_class());
+        b.set_tooltip_text(Some(&format!("Show {}", lane.name().to_lowercase())));
+        b.set_active(graph.lane_shown(lane));
         let g = graph.clone();
         b.connect_toggled(move |b| g.set_lane(lane, b.is_active()));
         lanes.append(&b);
     }
-    bar.append(&lanes);
+    right.append(&lanes);
 
     let pause = gtk::ToggleButton::builder()
         .icon_name("media-playback-pause-symbolic")
         .tooltip_text("Pause the graph (recording continues)")
-        .css_classes(["flat"])
+        .css_classes(["flat", "circular"])
+        .focus_on_click(false)
         .build();
     let g = graph.clone();
-    pause.connect_toggled(move |b| g.set_paused(b.is_active()));
-    bar.append(&pause);
+    pause.connect_toggled(move |b| {
+        g.set_paused(b.is_active());
+        b.set_icon_name(if b.is_active() {
+            "media-playback-start-symbolic"
+        } else {
+            "media-playback-pause-symbolic"
+        });
+    });
+    right.append(&pause);
+    bar.append(&right);
 
     section.append(&bar);
     let frame = gtk::Box::builder()
@@ -136,52 +192,97 @@ fn graph_section(graph: &Graph) -> gtk::Box {
         .build();
     frame.append(graph);
     section.append(&frame);
-    section
+    (section, bar, right)
+}
+
+/// An `AdwActionRow` whose suffix label is updated in place.
+fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
+    let value = gtk::Label::builder()
+        .css_classes(["numeric", "dim-label"])
+        .selectable(true)
+        .build();
+    let r = adw::ActionRow::builder().title(title).build();
+    r.add_suffix(&value);
+    group.add(&r);
+    value
 }
 
 pub struct Readouts {
     pub root: gtk::Box,
+    top: gtk::Box,
+    graph_bar: gtk::Box,
+    lane_toggles: gtk::Box,
     controls: Rc<Controls>,
     graph: Graph,
-    vout: Figure,
-    iout: Figure,
-    power: Figure,
-    mode: gtk::Label,
+    volts: Channel,
+    amps: Channel,
+    lamps: Vec<gtk::Label>,
+    power: gtk::Label,
+    vin: gtk::Label,
+    temp: gtk::Label,
     protection: gtk::Label,
     preset: gtk::Label,
     delivered: gtk::Label,
-    last_labels: Cell<Option<Instant>>,
-    vin: gtk::Label,
-    vo_max: gtk::Label,
-    temps: gtk::Label,
     rail: gtk::Label,
+    last_labels: Cell<Option<Instant>>,
+    setpoints: Cell<Option<(u16, u16)>>,
 }
 
 impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
+            .spacing(24)
+            .build();
+
+        // --- the instrument panel ---
+        let panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(18)
+            .css_classes(["card", "instrument"])
             .build();
 
-        let figures = gtk::Box::builder().spacing(12).homogeneous(true).build();
-        let (vout, b) = Figure::new("Voltage", "volts");
-        figures.append(&b);
-        let (iout, b) = Figure::new("Current", "amps");
-        figures.append(&b);
-        let (power, b) = Figure::new("Power", "watts");
-        figures.append(&b);
-        root.append(&figures);
+        let top = gtk::Box::builder().spacing(6).build();
+        let lamp_row = gtk::Box::builder().spacing(6).build();
+        let lamps: Vec<gtk::Label> = LAMPS
+            .iter()
+            .map(|(name, tip)| {
+                let l = gtk::Label::builder()
+                    .label(*name)
+                    .css_classes(["lamp"])
+                    .tooltip_text(*tip)
+                    .valign(gtk::Align::Center)
+                    .build();
+                lamp_row.append(&l);
+                l
+            })
+            .collect();
+        top.append(&lamp_row);
+        let spacer = gtk::Box::builder().hexpand(true).build();
+        top.append(&spacer);
+        top.append(&controls.toggle);
+        panel.append(&top);
 
-        let mode = gtk::Label::builder()
-            .css_classes(["mode-badge"])
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Center)
+        let channels = gtk::Box::builder().spacing(28).homogeneous(true).build();
+        let (volts, b) = Channel::new("VOLTAGE", "V", "volt");
+        channels.append(&b);
+        let (amps, b) = Channel::new("CURRENT", "A", "amp");
+        channels.append(&b);
+        panel.append(&channels);
+
+        let footer = gtk::Box::builder()
+            .spacing(12)
+            .css_classes(["instrument-footer"])
             .build();
-        let state = gtk::Box::builder().spacing(12).build();
-        state.append(&mode);
-        state.append(&controls.toggle);
-        root.append(&state);
+        let (power, b) = stat("POWER");
+        footer.append(&b);
+        let (vin, b) = stat("INPUT");
+        footer.append(&b);
+        let (temp, b) = stat("TEMPERATURE");
+        footer.append(&b);
+        panel.append(&footer);
+        root.append(&panel);
+
         root.append(&controls.setpoint);
 
         let graph = Graph::default();
@@ -191,37 +292,68 @@ impl Readouts {
         {
             graph.prefill(secs);
         }
-        root.append(&graph_section(&graph));
+        let (section, graph_bar, lane_toggles) = graph_section(&graph);
+        root.append(&section);
 
-        let output = adw::PreferencesGroup::builder().title("Output").build();
-        let protection = row(&output, "Protection");
-        let preset = row(&output, "Preset");
+        let output = adw::PreferencesGroup::builder().title("Details").build();
+        let protection = row(&output, "Protection trips");
+        let preset = row(&output, "Active preset");
         let delivered = row(&output, "Delivered since connecting");
+        let rail = row(&output, "Internal 5 V rail");
         root.append(&output);
-
-        let supply = adw::PreferencesGroup::builder().title("Supply").build();
-        let vin = row(&supply, "Input");
-        let vo_max = row(&supply, "Highest output available");
-        let temps = row(&supply, "Temperature");
-        let rail = row(&supply, "Internal 5 V rail");
-        root.append(&supply);
 
         Self {
             root,
+            top,
+            graph_bar,
+            lane_toggles,
             controls,
             graph,
-            vout,
-            iout,
+            volts,
+            amps,
+            lamps,
             power,
-            mode,
+            vin,
+            temp,
             protection,
             preset,
             delivered,
-            last_labels: Cell::new(None),
-            vin,
-            vo_max,
-            temps,
             rail,
+            last_labels: Cell::new(None),
+            setpoints: Cell::new(None),
+        }
+    }
+
+    /// On a narrow window, rows that would overflow are stacked: the power
+    /// switch drops below the lamps at full width, and the lane toggles go
+    /// under the time windows.
+    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+        let vertical = gtk::Orientation::Vertical.to_value();
+        bp.add_setter(&self.top, "orientation", Some(&vertical));
+        bp.add_setter(&self.top, "spacing", Some(&12.to_value()));
+        bp.add_setter(
+            &self.controls.toggle,
+            "halign",
+            Some(&gtk::Align::Fill.to_value()),
+        );
+        bp.add_setter(&self.graph_bar, "orientation", Some(&vertical));
+        bp.add_setter(
+            &self.lane_toggles,
+            "halign",
+            Some(&gtk::Align::Start.to_value()),
+        );
+    }
+
+    pub fn set_locked(&self, locked: bool) {
+        self.controls.set_locked(locked);
+    }
+
+    fn lamp(&self, k: usize, lit: bool) {
+        let l = &self.lamps[k];
+        if lit {
+            l.add_css_class("lit");
+        } else {
+            l.remove_css_class("lit");
         }
     }
 
@@ -236,37 +368,55 @@ impl Readouts {
         }
         self.last_labels.set(Some(at));
         self.controls.show_sample(m);
-        self.vout.value.set_label(&volts(m.vout_mv));
-        self.iout.value.set_label(&amps(m.iout_ma));
-        self.power
+
+        self.volts
             .value
+            .set_label(&format!("{:.3}", f64::from(m.vout_mv) / 1000.0));
+        self.amps
+            .value
+            .set_label(&format!("{:.3}", f64::from(m.iout_ma) / 1000.0));
+        self.power
             .set_label(&format!("{:.3} W", f64::from(m.power_mw()) / 1000.0));
         self.vin.set_label(&volts(m.vin_mv));
-        self.vo_max.set_label(&volts(m.vo_max_mv));
-        self.temps.set_label(&format!(
-            "{} / {}",
-            celsius(m.temp1_dc),
-            celsius(m.temp2_dc)
+        self.temp.set_label(&format!(
+            "{:.1} °C",
+            f64::from(m.temp1_dc.max(m.temp2_dc)) / 10.0
         ));
         self.rail.set_label(&volts(m.dc5v_mv));
 
-        let (text, class) = match (m.fault, m.mode) {
-            (f, _) if f != Fault::Ok => (format!("Tripped: {}", f.label()), "fault"),
-            (_, Mode::ConstantVoltage) => ("Output on · constant voltage".into(), "cv"),
-            (_, Mode::ConstantCurrent) => ("Output on · constant current".into(), "cc"),
-            (_, Mode::NoInput) => ("No input power".into(), "fault"),
-            (_, Mode::Off) => ("Output off".into(), "off"),
-            (_, Mode::Unknown(b)) => (format!("Unknown mode {b:#04x}"), "off"),
-        };
-        self.mode.set_label(&text);
-        for c in ["fault", "cv", "cc", "off"] {
-            self.mode.remove_css_class(c);
+        // Headroom: how much of the setpoint and the current limit is in use.
+        // In CC the current bar sits full and the voltage bar falls back.
+        if let Some((vset, iset)) = self.setpoints.get() {
+            let frac = |x: u16, of: u16| {
+                if of == 0 {
+                    0.0
+                } else {
+                    (f64::from(x) / f64::from(of)).clamp(0.0, 1.0)
+                }
+            };
+            self.volts.bar.set_fraction(frac(m.vout_mv, vset));
+            self.amps.bar.set_fraction(frac(m.iout_ma, iset));
         }
-        self.mode.add_css_class(class);
+
+        let on = m.output_on().unwrap_or(false);
+        self.lamp(0, on && m.mode == Mode::ConstantVoltage);
+        self.lamp(1, on && m.mode == Mode::ConstantCurrent);
+        self.lamp(2, on);
+        self.lamp(3, m.fault == Fault::OverVoltage);
+        self.lamp(4, m.fault == Fault::OverCurrent);
+        self.lamp(5, m.fault == Fault::OverPower);
+        self.lamp(6, m.fault == Fault::OverTemperature);
     }
 
     pub fn show_output(&self, o: &Setpoints) {
         self.controls.show_output(o);
+        self.setpoints.set(Some((o.vset_mv, o.iset_ma)));
+        self.volts
+            .note
+            .set_label(&format!("set {}", volts(o.vset_mv)));
+        self.amps
+            .note
+            .set_label(&format!("limit {}", amps(o.iset_ma)));
         self.protection
             .set_label(&format!("OVP {} · OCP {}", volts(o.ovp_mv), amps(o.ocp_ma)));
         self.preset.set_label(&if o.index == 0 {

@@ -56,8 +56,15 @@ struct Window {
     header: adw::HeaderBar,
     title: adw::WindowTitle,
     switcher: adw::ViewSwitcher,
+    switcher_bar: adw::ViewSwitcherBar,
+    views: adw::ViewStack,
     output_chip: gtk::Label,
     recording_chip: gtk::Label,
+    sequence_chip: gtk::Button,
+    /// The device pages are showing (not the status page).
+    connected: std::cell::Cell<bool>,
+    /// The window is too narrow for the switcher in the header.
+    narrow: std::cell::Cell<bool>,
     banner: adw::Banner,
     stack: gtk::Stack,
     status: adw::StatusPage,
@@ -86,6 +93,7 @@ pub fn activate(app: &adw::Application, simulate: bool) {
     let worker = Worker::spawn(source);
     let w = Rc::new(build(app, worker.commands.clone(), simulate));
     install_window_actions(app, &w);
+    install_breakpoint(&w);
 
     let events = worker.events.clone();
     // The worker lives as long as the window; dropping it stops the thread.
@@ -177,6 +185,28 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
         .connect_button_clicked(move |_| ctx.act(Action::ClearFault));
 }
 
+fn install_breakpoint(w: &Rc<Window>) {
+    let bp = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("max-width: 760sp").expect("valid condition"),
+    );
+    let ui = w.clone();
+    bp.connect_apply(move |_| {
+        ui.narrow.set(true);
+        ui.update_header();
+    });
+    let ui = w.clone();
+    bp.connect_unapply(move |_| {
+        ui.narrow.set(false);
+        ui.update_header();
+    });
+    w.readouts.narrow_layout(&bp);
+    w.ctx.window.add_breakpoint(bp);
+
+    let views = w.views.clone();
+    w.sequence_chip
+        .connect_clicked(move |_| views.set_visible_child_name("sequences"));
+}
+
 fn page<W: IsA<gtk::Widget>>(child: &W) -> gtk::ScrolledWindow {
     let clamp = adw::Clamp::builder()
         .maximum_size(720)
@@ -227,6 +257,14 @@ fn build(
         .visible(false)
         .build();
     header.pack_start(&recording_chip);
+    let sequence_chip = gtk::Button::builder()
+        .label("SEQ")
+        .css_classes(["sequence-chip"])
+        .tooltip_text("A sequence is running. Click to see it.")
+        .valign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    header.pack_start(&sequence_chip);
 
     let menu = gio::Menu::new();
     let device_section = gio::Menu::new();
@@ -301,6 +339,9 @@ fn build(
         .stack(&views)
         .policy(adw::ViewSwitcherPolicy::Wide)
         .build();
+    // On a narrow window the page switcher moves to the bottom, as GNOME
+    // apps do, rather than squeezing labels into the header.
+    let switcher_bar = adw::ViewSwitcherBar::builder().stack(&views).build();
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -312,6 +353,7 @@ fn build(
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
     view.add_top_bar(&banner);
+    view.add_bottom_bar(&switcher_bar);
     view.set_content(Some(&toasts));
     window.set_content(Some(&view));
 
@@ -320,8 +362,13 @@ fn build(
         header,
         title,
         switcher,
+        switcher_bar,
+        views,
         output_chip,
         recording_chip,
+        sequence_chip,
+        connected: std::cell::Cell::new(false),
+        narrow: std::cell::Cell::new(false),
         banner,
         stack,
         status,
@@ -343,10 +390,23 @@ impl Window {
         self.reconnect.set_visible(false);
         self.output_chip.set_visible(false);
         self.set_banner(None, false);
-        self.header.set_title_widget(Some(&self.title));
         self.title
             .set_subtitle(if self.simulated { "Simulated" } else { "" });
+        self.connected.set(false);
+        self.update_header();
         self.stack.set_visible_child_name("status");
+    }
+
+    /// The switcher goes in the header when there is room and a device to
+    /// switch between pages of; otherwise the header shows the app's name.
+    fn update_header(&self) {
+        let (connected, narrow) = (self.connected.get(), self.narrow.get());
+        if connected && !narrow {
+            self.header.set_title_widget(Some(&self.switcher));
+        } else {
+            self.header.set_title_widget(Some(&self.title));
+        }
+        self.switcher_bar.set_reveal(connected && narrow);
     }
 
     fn set_banner(&self, text: Option<&str>, clear_button: bool) {
@@ -380,7 +440,8 @@ impl Window {
             }
             Event::Connected(s) => {
                 self.set_banner(None, false);
-                self.header.set_title_widget(Some(&self.switcher));
+                self.connected.set(true);
+                self.update_header();
                 self.ctx.live.borrow_mut().output = Some(s.output);
                 self.ctx.live.borrow_mut().system = Some(s.system);
                 self.readouts.show_output(&s.output);
@@ -452,8 +513,18 @@ impl Window {
                 self.recording_chip.set_visible(false);
                 self.log.show_stopped(&r);
             }
-            Event::Sequence { name, status } => self.sequences.show_progress(&name, &status),
-            Event::SequenceEnded { name, outcome } => self.sequences.show_ended(&name, &outcome),
+            Event::Sequence { name, status } => {
+                self.sequence_chip
+                    .set_label(&format!("SEQ {}/{}", status.step + 1, status.steps));
+                self.sequence_chip.set_visible(true);
+                self.readouts.set_locked(true);
+                self.sequences.show_progress(&name, &status);
+            }
+            Event::SequenceEnded { name, outcome } => {
+                self.sequence_chip.set_visible(false);
+                self.readouts.set_locked(false);
+                self.sequences.show_ended(&name, &outcome);
+            }
             Event::Done(Ok(Some(note))) => self.ctx.toast(&note),
             Event::Done(Ok(None)) => {}
             Event::Done(Err(e)) => self.ctx.error(&e),

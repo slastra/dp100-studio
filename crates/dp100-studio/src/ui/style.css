@@ -1,70 +1,242 @@
-.figure {
-  padding: 12px 16px;
-}
+/* DP100 Studio
+ *
+ * A bench instrument's front panel, set in the user's own theme: channel
+ * colours are fixed (volts are always blue, amps always orange, the same as
+ * the graph lanes) so a reading is recognised by colour at a glance, while
+ * surfaces, text and the accent come from libadwaita and follow light and
+ * dark, and whatever accent the user picked.
+ */
 
-.figure-value {
-  font-size: 2.4em;
-  font-weight: 300;
-}
+@define-color dp_volt #3584e4;
+@define-color dp_amp #ff7800;
+@define-color dp_watt #9141ac;
+@define-color dp_heat #e01b24;
 
 .numeric {
   font-feature-settings: "tnum";
 }
 
-.mode-badge {
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-weight: bold;
+/* ---- the instrument panel ---------------------------------------------- */
+
+.instrument {
+  padding: 18px 22px 16px 22px;
+  border-radius: 18px;
+  /* A faint wash of the voltage channel's colour from the top, the way a
+     lit display tints the bezel around it. */
+  background-image: linear-gradient(to bottom, alpha(@dp_volt, 0.07), alpha(@dp_volt, 0) 55%);
 }
 
-.mode-badge.cv {
-  background: alpha(@success_color, 0.18);
+.channel {
+  padding-left: 14px;
+  border-left: 3px solid @dp_volt;
+}
+
+.channel.amp {
+  border-left-color: @dp_amp;
+}
+
+.channel-caption,
+.stat-caption {
+  font-size: 0.72em;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  opacity: 0.55;
+}
+
+.channel.volt .channel-caption {
+  color: @dp_volt;
+  opacity: 1;
+}
+
+.channel.amp .channel-caption {
+  color: @dp_amp;
+  opacity: 1;
+}
+
+.reading {
+  font-size: 3.4em;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+
+.reading-unit {
+  font-size: 1.5em;
+  font-weight: 500;
+  opacity: 0.45;
+}
+
+.channel-note {
+  font-size: 0.86em;
+  opacity: 0.6;
+}
+
+/* Headroom bars: how much of the setpoint or limit is in use. */
+progressbar.headroom > trough {
+  min-height: 4px;
+  border-radius: 2px;
+  background: alpha(currentColor, 0.08);
+}
+
+progressbar.headroom > trough > progress {
+  min-height: 4px;
+  border-radius: 2px;
+  background: @dp_volt;
+  transition: all 200ms ease-out;
+}
+
+progressbar.headroom.amp > trough > progress {
+  background: @dp_amp;
+}
+
+.instrument-footer {
+  padding-top: 12px;
+  border-top: 1px solid alpha(currentColor, 0.08);
+}
+
+.stat-value {
+  font-size: 1.15em;
+  font-weight: 500;
+}
+
+/* Annunciator lamps: unlit they are just printed legends; lit, they glow
+   in their colour. */
+.lamp {
+  font-size: 0.76em;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid alpha(currentColor, 0.14);
+  color: alpha(currentColor, 0.4);
+  transition: all 180ms ease-out;
+}
+
+.lamp.lit {
   color: @success_color;
+  border-color: alpha(@success_color, 0.6);
+  background: alpha(@success_color, 0.14);
+  box-shadow: 0 0 10px alpha(@success_color, 0.25);
 }
 
-.mode-badge.cc {
-  background: alpha(@warning_color, 0.2);
+/* CC, OUT and the trips each get their own colour when lit. */
+.lamp.lit:nth-child(2) {
   color: @warning_color;
+  border-color: alpha(@warning_color, 0.6);
+  background: alpha(@warning_color, 0.16);
+  box-shadow: 0 0 10px alpha(@warning_color, 0.3);
 }
 
-.mode-badge.fault {
-  background: alpha(@error_color, 0.2);
+.lamp.lit:nth-child(n + 3) {
   color: @error_color;
+  border-color: alpha(@error_color, 0.6);
+  background: alpha(@error_color, 0.14);
+  box-shadow: 0 0 10px alpha(@error_color, 0.3);
 }
 
-.mode-badge.off {
-  background: alpha(currentColor, 0.1);
+/* The power switch. Off it is a plain button; on, it glows red, so it is
+   obvious from across the bench that the terminals are live. */
+button.power-button {
+  padding: 6px 16px;
+  font-weight: 700;
+}
+
+button.power-button.on {
+  background: @error_bg_color;
+  color: @error_fg_color;
+  animation: live-glow 2.4s ease-in-out infinite alternate;
+}
+
+@keyframes live-glow {
+  from { box-shadow: 0 0 0 3px alpha(@error_bg_color, 0.2), 0 0 12px alpha(@error_bg_color, 0.3); }
+  to { box-shadow: 0 0 0 3px alpha(@error_bg_color, 0.3), 0 0 22px alpha(@error_bg_color, 0.55); }
+}
+
+/* ---- graph ------------------------------------------------------------- */
+
+.graph-card {
+  padding: 10px 6px 4px 0;
+  border-radius: 14px;
+}
+
+/* Segmented controls: a recessed track with the chosen segment raised. */
+.segmented {
+  padding: 2px;
+  border-radius: 9px;
+  background: alpha(currentColor, 0.07);
+}
+
+.segmented > button {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: none;
+  box-shadow: none;
+  font-weight: 600;
+  font-feature-settings: "tnum";
+  color: alpha(currentColor, 0.7);
+  transition: all 150ms ease-out;
+}
+
+.segmented > button:hover {
+  background: alpha(currentColor, 0.06);
+}
+
+.segmented > button:checked {
+  color: currentColor;
+  background: alpha(currentColor, 0.15);
+  box-shadow: 0 1px 2px alpha(black, 0.18);
+}
+
+.segmented > button.volt:checked { color: @dp_volt; }
+.segmented > button.amp:checked { color: @dp_amp; }
+.segmented > button.watt:checked { color: @dp_watt; }
+.segmented > button.heat:checked { color: @dp_heat; }
+
+/* ---- header chips ------------------------------------------------------ */
+
+.output-chip,
+.recording-chip,
+button.sequence-chip {
+  min-height: 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.82em;
+  font-weight: 800;
+  letter-spacing: 0.06em;
 }
 
 .output-chip {
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-weight: bold;
   background: @error_bg_color;
   color: @error_fg_color;
 }
 
-.graph-card {
-  padding: 8px 4px 4px 0;
+.recording-chip {
+  color: @error_color;
+  box-shadow: inset 0 0 0 2px @error_color;
+  animation: rec-pulse 1.1s ease-in-out infinite alternate;
 }
 
-button.small {
-  padding: 2px 8px;
-  min-height: 24px;
+@keyframes rec-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.4; }
 }
+
+button.sequence-chip {
+  background: alpha(@accent_bg_color, 0.2);
+  color: @accent_color;
+}
+
+button.sequence-chip:hover {
+  background: alpha(@accent_bg_color, 0.3);
+}
+
+/* ---- presets ----------------------------------------------------------- */
 
 .active-tag {
   padding: 2px 10px;
   border-radius: 999px;
-  font-weight: bold;
+  font-size: 0.85em;
+  font-weight: 800;
   background: @accent_bg_color;
   color: @accent_fg_color;
-}
-
-.recording-chip {
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-weight: bold;
-  color: @error_color;
-  border: 2px solid @error_color;
 }
