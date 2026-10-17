@@ -58,6 +58,10 @@ pub struct State {
     /// is active turns the output on. Reported by others; not reproduced on
     /// firmware 1.5, so off by default.
     pub preset0_bug: bool,
+    /// Adds a little measurement noise, so plots of a simulated unit look
+    /// like plots of a real one. Off by default; tests want exact values.
+    pub noise: bool,
+    noise_seed: u32,
     /// Every request that changed or could have changed state, in order.
     pub writes: Vec<Write>,
     /// Every request, reads included: (op, first data byte).
@@ -99,6 +103,8 @@ impl Default for State {
             fault: Fault::Ok,
             temp_dc: 281,
             preset0_bug: false,
+            noise: false,
+            noise_seed: 0x2545_f491,
             writes: Vec::new(),
             requests: Vec::new(),
             drop_replies: 0,
@@ -160,9 +166,23 @@ impl State {
         }
     }
 
+    /// A deviation of up to `spread` counts, from a small xorshift.
+    fn jitter(&mut self, spread: i32) -> i32 {
+        let mut x = self.noise_seed;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.noise_seed = x;
+        (x % (2 * spread as u32 + 1)) as i32 - spread
+    }
+
     fn basic_info(&mut self) -> Vec<u8> {
         self.check_protection();
-        let (v, i, mode) = measure(self);
+        let (mut v, mut i, mode) = measure(self);
+        if self.noise && v > 0 {
+            v = (i32::from(v) + self.jitter(3)).max(0) as u16;
+            i = (i32::from(i) + self.jitter(1)).max(0) as u16;
+        }
         let fault = match self.fault {
             Fault::Ok => 0,
             Fault::OverVoltage => 1,

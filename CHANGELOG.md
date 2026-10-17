@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows
   setpoints, protection, input, temperatures), connection status, hotplug,
   and warnings for permission problems, a busy device, trips and missing
   input. `--simulate` runs it against a simulated DP100.
+- Live graph: stacked voltage, current, power and temperature lanes, windows
+  from 10 s to 1 h, pause and hover readout. History is kept at three
+  resolutions, so an hour at 100 Hz draws in under a millisecond, and
+  min/max envelopes keep single-sample spikes visible at every zoom.
 - `dp100` crate: frame codec, hidraw transport, device discovery, and a
   `Device` with read-modify-write setpoint and output control.
 - Presets (read, save, activate), protection limits, system settings and

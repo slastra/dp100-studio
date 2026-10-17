@@ -43,3 +43,12 @@
   background: @error_bg_color;
   color: @error_fg_color;
 }
+
+.graph-card {
+  padding: 8px 4px 4px 0;
+}
+
+button.small {
+  padding: 2px 8px;
+  min-height: 24px;
+}

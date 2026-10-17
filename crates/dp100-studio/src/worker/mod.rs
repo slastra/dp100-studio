@@ -58,6 +58,7 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Sample {
+    pub at: Instant,
     pub m: BasicInfo,
 }
 
@@ -220,7 +221,7 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
         match dev.basic_info() {
             Ok(m) => {
                 failed = 0;
-                out.sample(Sample { m });
+                out.sample(Sample { at: now, m });
             }
             Err(e) if e.is_transient() => {
                 failed += 1;

@@ -1,3 +1,5 @@
+mod graph;
+mod history;
 mod readouts;
 
 use std::cell::RefCell;
@@ -18,6 +20,7 @@ const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap
 fn demo_sim() -> Source {
     let mut s = State::default();
     s.load_ohms = Some(100.0);
+    s.noise = true;
     s.live.vset_mv = 5_000;
     s.live.iset_ma = 100;
     s.live.on = true;
@@ -118,8 +121,8 @@ fn build(app: &adw::Application, simulated: bool) -> Window {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("DP100 Studio")
-        .default_width(560)
-        .default_height(720)
+        .default_width(640)
+        .default_height(860)
         .build();
 
     let title = adw::WindowTitle::new("DP100 Studio", "");
@@ -243,7 +246,7 @@ impl Window {
             }
             Event::Sample(s) => {
                 let m = s.m;
-                self.readouts.show_sample(&m);
+                self.readouts.show_sample(s.at, &m);
                 self.output_chip.set_visible(m.output_on().unwrap_or(false));
                 let warn = if m.fault != Fault::Ok {
                     Some(format!(

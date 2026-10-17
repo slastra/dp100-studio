@@ -1,7 +1,11 @@
 //! The live readout panel: big output figures and the details beneath.
 
+use std::time::Instant;
+
 use adw::prelude::*;
 use dp100::{BasicInfo, Fault, Mode, Setpoints, SystemSettings};
+
+use super::graph::{Graph, Lane};
 
 fn volts(mv: u16) -> String {
     format!("{:.3} V", f64::from(mv) / 1000.0)
@@ -56,8 +60,86 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
     value
 }
 
+/// The time windows offered, in seconds.
+const WINDOWS: [(&str, f64); 6] = [
+    ("10 s", 10.0),
+    ("30 s", 30.0),
+    ("1 min", 60.0),
+    ("5 min", 300.0),
+    ("15 min", 900.0),
+    ("1 h", 3600.0),
+];
+
+/// The graph with its window, lane and pause controls above it.
+fn graph_section(graph: &Graph) -> gtk::Box {
+    let section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .build();
+    let bar = gtk::Box::builder().spacing(12).build();
+
+    let windows = gtk::Box::builder().css_classes(["linked"]).build();
+    let mut first: Option<gtk::ToggleButton> = None;
+    for (label, secs) in WINDOWS {
+        let b = gtk::ToggleButton::builder()
+            .label(label)
+            .css_classes(["flat", "small"])
+            .active(secs == 30.0)
+            .build();
+        if let Some(f) = &first {
+            b.set_group(Some(f));
+        } else {
+            first = Some(b.clone());
+        }
+        let g = graph.clone();
+        b.connect_toggled(move |b| {
+            if b.is_active() {
+                g.set_window(secs);
+            }
+        });
+        windows.append(&b);
+    }
+    bar.append(&windows);
+
+    let lanes = gtk::Box::builder()
+        .css_classes(["linked"])
+        .hexpand(true)
+        .halign(gtk::Align::End)
+        .build();
+    for lane in Lane::ALL {
+        let b = gtk::ToggleButton::builder()
+            .label(lane.short())
+            .tooltip_text(format!("Show {}", lane.name().to_lowercase()))
+            .css_classes(["flat", "small", "lane-toggle"])
+            .active(graph.lane_shown(lane))
+            .build();
+        let g = graph.clone();
+        b.connect_toggled(move |b| g.set_lane(lane, b.is_active()));
+        lanes.append(&b);
+    }
+    bar.append(&lanes);
+
+    let pause = gtk::ToggleButton::builder()
+        .icon_name("media-playback-pause-symbolic")
+        .tooltip_text("Pause the graph (recording continues)")
+        .css_classes(["flat"])
+        .build();
+    let g = graph.clone();
+    pause.connect_toggled(move |b| g.set_paused(b.is_active()));
+    bar.append(&pause);
+
+    section.append(&bar);
+    let frame = gtk::Box::builder()
+        .css_classes(["card", "graph-card"])
+        .build();
+    frame.append(graph);
+    section.append(&frame);
+    section
+}
+
 pub struct Readouts {
     pub root: gtk::Box,
+    graph: Graph,
     vout: Figure,
     iout: Figure,
     power: Figure,
@@ -94,6 +176,15 @@ impl Readouts {
             .build();
         root.append(&mode);
 
+        let graph = Graph::default();
+        if let Some(secs) = std::env::var("DP100_STUDIO_PREFILL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            graph.prefill(secs);
+        }
+        root.append(&graph_section(&graph));
+
         let output = adw::PreferencesGroup::builder().title("Output").build();
         let setpoint = row(&output, "Setpoint");
         let protection = row(&output, "Protection");
@@ -110,6 +201,7 @@ impl Readouts {
 
         Self {
             root,
+            graph,
             vout,
             iout,
             power,
@@ -125,7 +217,8 @@ impl Readouts {
         }
     }
 
-    pub fn show_sample(&self, m: &BasicInfo) {
+    pub fn show_sample(&self, at: Instant, m: &BasicInfo) {
+        self.graph.push(at, m);
         self.vout.value.set_label(&volts(m.vout_mv));
         self.iout.value.set_label(&amps(m.iout_ma));
         self.power

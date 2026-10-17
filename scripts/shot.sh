@@ -8,7 +8,8 @@
 #
 # The app gets a private runtime, config and state directory, so nothing it
 # remembers leaks into your real profile. Set SHOT_DELAY (seconds, default 3)
-# to let the readouts settle before the capture.
+# to let the readouts settle before the capture, and SHOT_POINTER="X Y" to
+# move a virtual pointer there first (for hover states).
 set -u
 OUT=${1:?usage: shot.sh OUT.png [WxH] [app args...]}
 SIZE=${2:-600x820}
@@ -44,6 +45,11 @@ env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" GDK_BACKEND=wayland
     "$BIN" "$@" >"$RT/app.log" 2>&1 &
 APP=$!
 sleep "${SHOT_DELAY:-3}"
+if [ -n "${SHOT_POINTER:-}" ]; then
+    # wlrctl moves relative to where the pointer is; it starts at 0,0.
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move $SHOT_POINTER
+    sleep 0.5
+fi
 XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "$OUT" || { cat "$RT/app.log" >&2; exit 1; }
 grep -v '^$' "$RT/app.log" >&2 || true
 echo "$OUT"
