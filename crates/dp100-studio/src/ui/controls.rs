@@ -56,7 +56,7 @@ impl Controls {
 
         let setpoint = adw::PreferencesGroup::builder()
             .title("Setpoint")
-            .description("Changes apply as you make them. The output stays on or off as it is.")
+            .description("Changes apply as you make them; the output stays on or off as it is")
             .build();
         setpoint.add(&v);
         setpoint.add(&i);
@@ -69,7 +69,7 @@ impl Controls {
             .child(&toggle_content)
             .css_classes(["pill", "power-button"])
             .valign(gtk::Align::Center)
-            .tooltip_text("Turn the output on (asks first)")
+            .tooltip_text("Turn the Output On")
             .build();
 
         let c = Rc::new(Self {
@@ -215,12 +215,11 @@ impl Controls {
                 self.toggle_content.set_label("Turn Off");
                 self.toggle.add_css_class("on");
                 self.toggle
-                    .set_tooltip_text(Some("Turn the output off (F9 does this from anywhere)"));
+                    .set_tooltip_text(Some("Turn the Output Off (F9)"));
             } else {
                 self.toggle_content.set_label("Turn On");
                 self.toggle.remove_css_class("on");
-                self.toggle
-                    .set_tooltip_text(Some("Turn the output on (asks first)"));
+                self.toggle.set_tooltip_text(Some("Turn the Output On"));
             }
         }
         // Off always works. On needs input power and no latched trip.

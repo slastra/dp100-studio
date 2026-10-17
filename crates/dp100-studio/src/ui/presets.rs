@@ -68,12 +68,12 @@ impl Card {
             .label("Edit")
             .hexpand(true)
             .css_classes(["pill", "small-pill"])
-            .tooltip_text(format!("Change what M{n} holds"))
+            .tooltip_text(format!("Change What M{n} Holds"))
             .build();
         let activate = gtk::Button::builder()
             .label("Use")
             .css_classes(["flat", "small-pill"])
-            .tooltip_text(format!("Switch the DP100 to M{n} now"))
+            .tooltip_text(format!("Switch the DP100 to M{n} Now"))
             .build();
         buttons.append(&edit);
         buttons.append(&activate);
@@ -293,7 +293,7 @@ impl Presets {
     pub fn show_presets(&self, presets: &[Setpoints]) {
         for (c, p) in self.rows.iter().zip(presets) {
             c.volts
-                .set_label(&format!("{:.2} V", f64::from(p.vset_mv) / 1000.0));
+                .set_label(&format!("{:.2}\u{202f}V", f64::from(p.vset_mv) / 1000.0));
             c.amps.set_label(&amps(p.iset_ma));
             c.trips
                 .set_label(&format!("OVP {} · OCP {}", volts(p.ovp_mv), amps(p.ocp_ma)));
@@ -335,9 +335,9 @@ impl Presets {
             // values are changed live from the Monitor and Device pages.
             c.edit.set_sensitive(!is);
             c.edit.set_tooltip_text(Some(&if is {
-                "This preset is active. Change its setpoints on the Monitor page and its trips on the Device page.".to_owned()
+                "In Use: Change It on the Monitor and Device Pages".to_owned()
             } else {
-                format!("Edit preset {}", k + 1)
+                format!("Change What M{} Holds", k + 1)
             }));
         }
     }

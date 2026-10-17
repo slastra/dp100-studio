@@ -90,9 +90,9 @@ pub fn line(step: &Step) -> (String, Option<String>) {
     match step {
         Step::Set { voltage, current } => (
             match (voltage, current) {
-                (Some(v), Some(i)) => format!("{v:.2} V, current limit {i:.3} A"),
-                (Some(v), None) => format!("Voltage {v:.2} V"),
-                (None, Some(i)) => format!("Current limit {i:.3} A"),
+                (Some(v), Some(i)) => format!("{v:.2}\u{202f}V, current limit {i:.3}\u{202f}A"),
+                (Some(v), None) => format!("Voltage {v:.2}\u{202f}V"),
+                (None, Some(i)) => format!("Current limit {i:.3}\u{202f}A"),
                 (None, None) => "Nothing to change".into(),
             },
             None,

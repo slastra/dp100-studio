@@ -233,7 +233,7 @@ impl Sequences {
             .child(&title_box)
             .popover(&popover)
             .css_classes(["flat", "seq-picker"])
-            .tooltip_text("Switch to another sequence, or start a new one")
+            .tooltip_text("Switch Sequence or Start a New One")
             .halign(gtk::Align::Start)
             .build();
         let meta = gtk::Label::builder()
@@ -315,7 +315,7 @@ impl Sequences {
             .build();
         let steps_group = adw::PreferencesGroup::builder()
             .title("Steps")
-            .description("Run top to bottom. Click a step to change it.")
+            .description("Run top to bottom; click a step to change it")
             .header_suffix(&add)
             .build();
         root.add(&steps_group);
@@ -667,9 +667,9 @@ impl Sequences {
         if steps.is_empty() {
             let r = adw::ActionRow::builder()
                 .title(if doc.is_some() {
-                    "No steps yet. Add one with Add Step."
+                    "No steps yet; add one with Add Step"
                 } else {
-                    "Start one with New Sequence, under the name above."
+                    "Start one with New Sequence, under the name above"
                 })
                 .css_classes(["dim-label"])
                 .build();
@@ -756,12 +756,17 @@ impl Sequences {
                 .tooltip_text(tip)
                 .sensitive(enabled)
                 .build();
+            // Icon-only, so it needs a name of its own for screen readers.
+            b.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{tip}: step {}",
+                k + 1
+            ))]);
             tools.append(&b);
             b
         };
-        let up = tool("go-up-symbolic", "Move up", k > 0);
-        let down = tool("go-down-symbolic", "Move down", k + 1 < n);
-        let remove = tool("user-trash-symbolic", "Remove this step", true);
+        let up = tool("go-up-symbolic", "Move Up", k > 0);
+        let down = tool("go-down-symbolic", "Move Down", k + 1 < n);
+        let remove = tool("user-trash-symbolic", "Remove Step", true);
         row.add_suffix(&tools);
 
         let w = Rc::downgrade(self);
@@ -830,7 +835,7 @@ impl Sequences {
         }
         let doc = self.doc.borrow();
         let Some((_, seq)) = doc.as_ref() else {
-            self.meta.set_label("Sequences you make are kept here.");
+            self.meta.set_label("Sequences you make are kept here");
             for k in 0..4 {
                 self.panel.lamp(k, false);
             }
@@ -865,7 +870,7 @@ impl Sequences {
             );
             b.append(
                 &gtk::Label::builder()
-                    .label(text)
+                    .label(text.strip_suffix('.').unwrap_or(text))
                     .wrap(true)
                     .xalign(0.0)
                     .hexpand(true)
@@ -908,8 +913,12 @@ impl Sequences {
             "Counting each wait-until step as met at once; a real run takes as long as they take",
         ));
         if report.turns_on {
-            set(2, "UP TO", &format!("{:.2} V", report.max_voltage));
-            set(3, "LIMIT UP TO", &format!("{:.3} A", report.max_current));
+            set(2, "UP TO", &format!("{:.2}\u{202f}V", report.max_voltage));
+            set(
+                3,
+                "LIMIT UP TO",
+                &format!("{:.3}\u{202f}A", report.max_current),
+            );
         } else {
             set(2, "UP TO", "off");
             set(3, "LIMIT UP TO", "off");

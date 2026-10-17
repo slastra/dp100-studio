@@ -27,7 +27,104 @@ use presets::Presets;
 use readouts::Readouts;
 use sequences::Sequences;
 
-const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap ◀ on the panel.";
+const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap ◀ on its panel";
+
+/// The pages, in switcher order, for Alt+1 to Alt+5.
+const PAGES: [&str; 5] = ["monitor", "presets", "sequences", "log", "device"];
+
+const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="GtkShortcutsWindow" id="help_overlay">
+    <property name="modal">True</property>
+    <child>
+      <object class="GtkShortcutsSection">
+        <property name="section-name">main</property>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Output</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Turn Output Off</property>
+                <property name="accelerator">F9</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Pages</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Monitor, Presets, Sequences, Log, Device</property>
+                <property name="accelerator">&lt;Alt&gt;1...&lt;Alt&gt;5</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">General</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Main Menu</property>
+                <property name="accelerator">F10</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Keyboard Shortcuts</property>
+                <property name="accelerator">&lt;Control&gt;question</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Close Window</property>
+                <property name="accelerator">&lt;Control&gt;w</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Quit</property>
+                <property name="accelerator">&lt;Control&gt;q</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>"#;
+
+/// Where the window's size is remembered between runs.
+fn window_state_file() -> std::path::PathBuf {
+    // XDG_STATE_HOME, as glib::user_state_dir() would give (it needs a
+    // newer glib feature than the floor here).
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| glib::home_dir().join(".local").join("state"))
+        .join("dp100-studio")
+        .join("window")
+}
+
+/// (width, height, maximized) from the last run.
+fn load_window_state() -> Option<(i32, i32, bool)> {
+    let text = std::fs::read_to_string(window_state_file()).ok()?;
+    let mut it = text.split_whitespace();
+    let w = it.next()?.parse().ok()?;
+    let h = it.next()?.parse().ok()?;
+    let m = it.next().is_some_and(|m| m == "1");
+    (w >= 360 && h >= 294).then_some((w, h, m))
+}
+
+fn save_window_state(win: &adw::ApplicationWindow) {
+    let (w, h) = win.default_size();
+    let path = window_state_file();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format!("{w} {h} {}\n", u8::from(win.is_maximized())));
+}
 
 /// A simulated unit that looks like a bench in use: output on at 5 V into a
 /// 100 Ω load, so it sits in CV at 50 mA.
@@ -70,12 +167,19 @@ struct Window {
     stack: gtk::Stack,
     status: adw::StatusPage,
     reconnect: gtk::Button,
+    setup_help: gtk::Button,
     readouts: Readouts,
     presets: Rc<Presets>,
     device: Rc<Device>,
     log: Rc<Log>,
     sequences: Rc<Sequences>,
     simulated: bool,
+    /// Suspend and logout held off while recording or running a sequence.
+    inhibit: std::cell::Cell<Option<u32>>,
+    recording: std::cell::Cell<bool>,
+    last_fault: std::cell::Cell<Fault>,
+    /// For the About dialog's troubleshooting section.
+    debug_info: RefCell<String>,
 }
 
 pub fn activate(app: &adw::Application, simulate: bool) {
@@ -107,17 +211,19 @@ pub fn activate(app: &adw::Application, simulate: bool) {
             let win = win.clone();
             let ui2 = ui.clone();
             ui.ctx.confirm(
-                "Stop the sequence and quit?",
-                "A sequence is running. Quitting stops it, and applies its \"if it stops early\" setting.",
+                "Stop the Sequence and Quit?",
+                "A sequence is running. Quitting stops it, and applies its \"if it stops early\" setting",
                 "Stop and Quit",
                 adw::ResponseAppearance::Destructive,
                 move || {
+                    save_window_state(&win);
                     let _ = &ui2;
                     win.destroy();
                 },
             );
             return glib::Propagation::Stop;
         }
+        save_window_state(win);
         worker.borrow_mut().take();
         glib::Propagation::Proceed
     });
@@ -133,36 +239,103 @@ pub fn activate(app: &adw::Application, simulate: bool) {
 }
 
 fn install_app_actions(app: &adw::Application) {
-    let about = gio::ActionEntry::builder("about")
-        .activate(|app: &adw::Application, _, _| {
-            let dialog = adw::AboutDialog::builder()
-                .application_name("DP100 Studio")
-                .application_icon(crate::APP_ID)
-                .developer_name("Shaun Lastra")
-                .version(env!("CARGO_PKG_VERSION"))
-                .license_type(gtk::License::Gpl30)
-                .website("https://github.com/slastra/dp100-studio")
-                .issue_url("https://github.com/slastra/dp100-studio/issues")
-                .comments(
-                    "Control and monitor the ALIENTEK DP100 bench power supply.\n\n\
-                     Not affiliated with or endorsed by ALIENTEK.",
-                )
-                .build();
-            dialog.add_credit_section(
-                Some("Protocol research"),
-                &[
-                    "jjcarrier/vicon https://github.com/jjcarrier/vicon",
-                    "weigu1/dp100_manipulator https://github.com/weigu1/dp100_manipulator",
-                ],
-            );
-            dialog.present(app.active_window().as_ref());
-        })
-        .build();
     let quit = gio::ActionEntry::builder("quit")
         .activate(|app: &adw::Application, _, _| app.quit())
         .build();
-    app.add_action_entries([about, quit]);
+    app.add_action_entries([quit]);
     app.set_accels_for_action("app.quit", &["<Control>q"]);
+}
+
+impl Window {
+    fn about(&self) {
+        let dialog = adw::AboutDialog::builder()
+            .application_name("DP100 Studio")
+            .application_icon(crate::APP_ID)
+            .developer_name("Shaun Lastra")
+            .version(env!("CARGO_PKG_VERSION"))
+            .license_type(gtk::License::Gpl30)
+            .website("https://github.com/slastra/dp100-studio")
+            .issue_url("https://github.com/slastra/dp100-studio/issues")
+            .comments(
+                "Control and monitor the ALIENTEK DP100 bench power supply\n\n\
+                 Not affiliated with or endorsed by ALIENTEK",
+            )
+            .debug_info(self.debug_text())
+            .debug_info_filename("dp100-studio-debug.txt")
+            .build();
+        dialog.add_credit_section(
+            Some("Protocol Research"),
+            &[
+                "jjcarrier/vicon https://github.com/jjcarrier/vicon",
+                "weigu1/dp100_manipulator https://github.com/weigu1/dp100_manipulator",
+            ],
+        );
+        dialog.present(Some(&self.ctx.window));
+    }
+
+    /// Plain text for bug reports: versions of everything involved.
+    fn debug_text(&self) -> String {
+        let device = self.debug_info.borrow();
+        format!(
+            "DP100 Studio {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}\n{}{}\n",
+            env!("CARGO_PKG_VERSION"),
+            gtk::major_version(),
+            gtk::minor_version(),
+            gtk::micro_version(),
+            adw::major_version(),
+            adw::minor_version(),
+            adw::micro_version(),
+            if device.is_empty() {
+                "No DP100 connected"
+            } else {
+                device.as_str()
+            },
+            if self.simulated { " (simulated)" } else { "" },
+        )
+    }
+
+    /// Holds off suspend and logout while something is running that a sleep
+    /// would ruin, and lets go when it stops.
+    fn update_inhibit(&self) {
+        let Some(app) = self.ctx.window.application() else {
+            return;
+        };
+        let reason = if self.sequences.is_running() {
+            Some("Running a sequence on the DP100")
+        } else if self.recording.get() {
+            Some("Recording the DP100's measurements")
+        } else {
+            None
+        };
+        if let Some(cookie) = self.inhibit.take() {
+            app.uninhibit(cookie);
+        }
+        if let Some(reason) = reason {
+            let cookie = app.inhibit(
+                Some(&self.ctx.window),
+                gtk::ApplicationInhibitFlags::SUSPEND | gtk::ApplicationInhibitFlags::LOGOUT,
+                Some(reason),
+            );
+            if cookie != 0 {
+                self.inhibit.set(Some(cookie));
+            }
+        }
+    }
+
+    /// A desktop notification, only when the user is in another window;
+    /// otherwise the toast or banner in this one says the same.
+    fn notify(&self, id: &str, title: &str, body: &str, page: &str) {
+        if self.ctx.window.is_active() {
+            return;
+        }
+        let Some(app) = self.ctx.window.application() else {
+            return;
+        };
+        let n = gio::Notification::new(title);
+        n.set_body(Some(body));
+        n.set_default_action_and_target_value("app.show-page", Some(&page.to_variant()));
+        app.send_notification(Some(id), &n);
+    }
 }
 
 fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
@@ -175,8 +348,49 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
     let release = gio::ActionEntry::builder("release")
         .activate(move |_: &adw::ApplicationWindow, _, _| ctx.command(Command::Release))
         .build();
-    w.ctx.window.add_action_entries([off, release]);
+    let ui = w.clone();
+    let about = gio::ActionEntry::builder("about")
+        .activate(move |_: &adw::ApplicationWindow, _, _| ui.about())
+        .build();
+    let close = gio::ActionEntry::builder("close")
+        .activate(|win: &adw::ApplicationWindow, _, _| win.close())
+        .build();
+    let ui = w.clone();
+    let page = gio::ActionEntry::builder("page")
+        .parameter_type(Some(glib::VariantTy::STRING))
+        .activate(move |_: &adw::ApplicationWindow, _, v| {
+            if let Some(name) = v.and_then(|v| v.str()) {
+                ui.views.set_visible_child_name(name);
+            }
+        })
+        .build();
+    w.ctx
+        .window
+        .add_action_entries([off, release, about, close, page]);
     app.set_accels_for_action("win.output-off", &["F9"]);
+    app.set_accels_for_action("win.close", &["<Control>w"]);
+    for (k, name) in PAGES.iter().enumerate() {
+        app.set_accels_for_action(&format!("win.page::{name}"), &[&format!("<Alt>{}", k + 1)]);
+    }
+
+    // A notification's default action raises the window on the page it
+    // is about.
+    let ui = w.clone();
+    let show = gio::ActionEntry::builder("show-page")
+        .parameter_type(Some(glib::VariantTy::STRING))
+        .activate(move |_: &adw::Application, _, v| {
+            if let Some(name) = v.and_then(|v| v.str()) {
+                ui.views.set_visible_child_name(name);
+            }
+            ui.ctx.window.present();
+        })
+        .build();
+    app.add_action_entries([show]);
+
+    let shortcuts = gtk::Builder::from_string(SHORTCUTS)
+        .object::<gtk::ShortcutsWindow>("help_overlay")
+        .expect("shortcuts window in the builder string");
+    w.ctx.window.set_help_overlay(Some(&shortcuts));
 
     let ctx = w.ctx.clone();
     w.reconnect
@@ -240,7 +454,15 @@ fn build(
         })
         .default_width(640)
         .default_height(900)
+        .width_request(360)
+        .height_request(294)
         .build();
+    if let Some((w, h, maximized)) = load_window_state() {
+        window.set_default_size(w, h);
+        if maximized {
+            window.maximize();
+        }
+    }
     let toasts = adw::ToastOverlay::new();
     let ctx = Rc::new(Ctx::new(cmds, window.clone(), toasts.clone()));
 
@@ -250,14 +472,14 @@ fn build(
     let recording_chip = gtk::Label::builder()
         .label("REC")
         .css_classes(["recording-chip"])
-        .tooltip_text("Recording to CSV. Stop it on the Log page.")
+        .tooltip_text("Recording to a File")
         .visible(false)
         .build();
     header.pack_start(&recording_chip);
     let sequence_chip = gtk::Button::builder()
         .label("SEQ")
         .css_classes(["sequence-chip"])
-        .tooltip_text("A sequence is running. Click to see it.")
+        .tooltip_text("Show the Running Sequence")
         .valign(gtk::Align::Center)
         .visible(false)
         .build();
@@ -265,18 +487,19 @@ fn build(
 
     let menu = gio::Menu::new();
     let device_section = gio::Menu::new();
-    device_section.append(Some("Turn Output Off"), Some("win.output-off"));
-    device_section.append(Some("Release Front Panel"), Some("win.release"));
+    device_section.append(Some("Turn Output _Off"), Some("win.output-off"));
+    device_section.append(Some("_Release Front Panel"), Some("win.release"));
     menu.append_section(None, &device_section);
     let app_section = gio::Menu::new();
-    app_section.append(Some("About DP100 Studio"), Some("app.about"));
+    app_section.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
+    app_section.append(Some("_About DP100 Studio"), Some("win.about"));
     menu.append_section(None, &app_section);
     header.pack_end(
         &gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&menu)
             .primary(true)
-            .tooltip_text("Main menu")
+            .tooltip_text("Main Menu")
             .build(),
     );
 
@@ -288,11 +511,30 @@ fn build(
         .halign(gtk::Align::Center)
         .visible(false)
         .build();
+    let setup_help = gtk::Button::builder()
+        .label("Open Setup Guide")
+        .css_classes(["pill", "suggested-action"])
+        .halign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    setup_help.connect_clicked(|b| {
+        gtk::UriLauncher::new("https://github.com/slastra/dp100-studio#device-access").launch(
+            b.root().and_downcast_ref::<gtk::Window>(),
+            gio::Cancellable::NONE,
+            |_| {},
+        );
+    });
+    let status_actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .halign(gtk::Align::Center)
+        .build();
+    status_actions.append(&reconnect);
+    status_actions.append(&setup_help);
     let status = adw::StatusPage::builder()
         .icon_name("uninterruptible-power-supply-symbolic")
-        .title("Looking for a DP100")
+        .title("No DP100 Connected")
         .description(USBD_HINT)
-        .child(&reconnect)
+        .child(&status_actions)
         .build();
 
     let controls = Controls::new(ctx.clone());
@@ -369,12 +611,17 @@ fn build(
         stack,
         status,
         reconnect,
+        setup_help,
         readouts,
         presets,
         device,
         log,
         sequences,
         simulated,
+        inhibit: std::cell::Cell::new(None),
+        recording: std::cell::Cell::new(false),
+        last_fault: std::cell::Cell::new(Fault::Ok),
+        debug_info: RefCell::new(String::new()),
     }
 }
 
@@ -384,6 +631,7 @@ impl Window {
         self.status.set_title(title);
         self.status.set_description(Some(description));
         self.reconnect.set_visible(false);
+        self.setup_help.set_visible(false);
         self.set_banner(None, false);
         self.title
             .set_subtitle(if self.simulated { "Simulated" } else { "" });
@@ -418,21 +666,27 @@ impl Window {
 
     fn apply(&self, ev: Event) {
         match ev {
-            Event::Searching => self.status("Looking for a DP100", USBD_HINT),
-            Event::Problem(p) => {
-                let text = match &p {
-                    Problem::PermissionDenied(path) => format!(
-                        "No permission to open {}. Install the udev rule (see README) and replug.",
+            Event::Searching => self.status("No DP100 Connected", USBD_HINT),
+            Event::Problem(p) => match &p {
+                Problem::PermissionDenied(path) => {
+                    self.status(
+                        "Permission Needed",
+                        &format!(
+                            "This user can't open {}. Install the udev rule, then unplug the DP100 and plug it back in",
+                            path.display()
+                        ),
+                    );
+                    self.setup_help.set_visible(true);
+                }
+                Problem::Busy(path) => self.status(
+                    "DP100 in Use",
+                    &format!(
+                        "Another program has {} open. DP100 Studio connects as soon as it closes",
                         path.display()
                     ),
-                    Problem::Busy(path) => format!(
-                        "{} is in use by another program. Close it to connect.",
-                        path.display()
-                    ),
-                    Problem::Other(e) => format!("Can't open the DP100: {e}"),
-                };
-                self.status("DP100 found, but not usable", &text);
-            }
+                ),
+                Problem::Other(e) => self.status("Can't Open the DP100", e),
+            },
             Event::Connected(s) => {
                 self.set_banner(None, false);
                 self.connected.set(true);
@@ -443,6 +697,14 @@ impl Window {
                 self.presets.show_active(s.output.index);
                 self.presets.show_output(&s.output);
                 self.device.show_info(&s.info);
+                *self.debug_info.borrow_mut() = format!(
+                    "{} firmware {} hardware {} bootloader {} serial {}",
+                    s.info.model,
+                    s.info.firmware,
+                    s.info.hardware,
+                    s.info.bootloader,
+                    s.info.serial_hex()
+                );
                 self.device.show_output(&s.output);
                 self.device.show_system(&s.system);
                 self.stack.set_visible_child_name("device");
@@ -452,17 +714,26 @@ impl Window {
                 self.ctx.live.borrow_mut().sample = Some(m);
                 self.readouts.show_sample(s.at, &m);
                 self.device.show_sample(&m);
+                if m.fault != Fault::Ok && self.last_fault.get() == Fault::Ok {
+                    self.notify(
+                        "trip",
+                        "Protection Tripped",
+                        &format!("{}: the DP100 turned its output off", m.fault.label()),
+                        "monitor",
+                    );
+                }
+                self.last_fault.set(m.fault);
                 if m.fault != Fault::Ok {
                     self.set_banner(
                         Some(&format!(
-                            "Protection tripped ({}). The output is held off until the trip is cleared.",
+                            "Protection tripped ({}). The output stays off until the trip is cleared",
                             m.fault.label()
                         )),
                         true,
                     );
                 } else if m.mode == Mode::NoInput {
                     self.set_banner(
-                        Some("No input power. Connect a USB-C PD charger or a 5–32 V DC supply."),
+                        Some("No input power. Connect a USB-C PD charger or a 5–32 V DC supply"),
                         false,
                     );
                 } else {
@@ -504,10 +775,18 @@ impl Window {
             }
             Event::Recording(r) => {
                 self.recording_chip.set_visible(true);
+                if !self.recording.replace(true) {
+                    self.update_inhibit();
+                }
                 self.log.show_recording(&r);
             }
             Event::RecordingStopped(r) => {
                 self.recording_chip.set_visible(false);
+                self.recording.set(false);
+                self.update_inhibit();
+                if let Err(e) = &r {
+                    self.notify("recording", "Recording Stopped", e, "log");
+                }
                 self.log.show_stopped(&r);
             }
             Event::Sequence { name, status } => {
@@ -515,27 +794,47 @@ impl Window {
                     .set_label(&format!("SEQ {}/{}", status.step + 1, status.steps));
                 self.sequence_chip.set_visible(true);
                 self.readouts.set_locked(true);
+                let was_running = self.sequences.is_running();
                 self.sequences.show_progress(&name, &status);
+                if !was_running {
+                    self.update_inhibit();
+                }
             }
             Event::SequenceEnded { name, outcome } => {
                 self.sequence_chip.set_visible(false);
                 self.readouts.set_locked(false);
                 self.sequences.show_ended(&name, &outcome);
+                self.update_inhibit();
+                match &outcome {
+                    crate::seq::exec::Outcome::Finished => self.notify(
+                        "sequence",
+                        "Sequence Finished",
+                        &format!("“{name}” ran to the end"),
+                        "sequences",
+                    ),
+                    crate::seq::exec::Outcome::Aborted(why) => self.notify(
+                        "sequence",
+                        "Sequence Stopped",
+                        &format!("“{name}”: {why}"),
+                        "sequences",
+                    ),
+                    crate::seq::exec::Outcome::Running => {}
+                }
             }
             Event::Done(Ok(Some(note))) => self.ctx.toast(&note),
             Event::Done(Ok(None)) => {}
             Event::Done(Err(e)) => self.ctx.error(&e),
             Event::Released => {
                 self.status(
-                    "Front panel released",
+                    "Front Panel Released",
                     "The DP100's buttons work again, and other programs can open it. \
-                     DP100 Studio is not reading the supply until you reconnect.",
+                     DP100 Studio isn't reading the supply until you reconnect",
                 );
                 self.reconnect.set_visible(true);
             }
             Event::Disconnected(why) => self.status(
-                "DP100 disconnected",
-                &format!("{why}. Reconnect it and put it in USBD mode: double-tap ◀ on the panel."),
+                "DP100 Disconnected",
+                &format!("{why}. Reconnect it and put it in USBD mode: double-tap ◀ on its panel"),
             ),
         }
     }

@@ -35,7 +35,7 @@ impl Form {
             .label("Revert")
             .css_classes(["flat"])
             .valign(gtk::Align::Center)
-            .tooltip_text("Discard the edits and show the device's values again")
+            .tooltip_text("Discard Your Changes")
             .build();
         let buttons = gtk::Box::builder().spacing(6).build();
         buttons.append(&revert);
@@ -183,7 +183,7 @@ impl Device {
         hg.add(&panel.root);
         root.add(&hg);
 
-        let protection = Form::new("Save the trips to the active preset. They apply at once.");
+        let protection = Form::new("Save the Trips to the Active Preset");
         let pg = adw::PreferencesGroup::builder()
             .title("Protection")
             .description(
@@ -198,7 +198,7 @@ impl Device {
         pg.add(&ocp);
         root.add(&pg);
 
-        let system = Form::new("Save these settings to the DP100.");
+        let system = Form::new("Save These Settings to the DP100");
         let sg = adw::PreferencesGroup::builder()
             .title("Settings")
             .header_suffix(&system.bar)

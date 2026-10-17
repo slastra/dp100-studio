@@ -161,7 +161,7 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
     for lane in Lane::ALL {
         let b = segment(lane.short());
         b.add_css_class(lane.css_class());
-        b.set_tooltip_text(Some(&format!("Show {}", lane.name().to_lowercase())));
+        b.set_tooltip_text(Some(&format!("Show {}", lane.name())));
         b.set_active(graph.lane_shown(lane));
         let g = graph.clone();
         b.connect_toggled(move |b| g.set_lane(lane, b.is_active()));
@@ -171,10 +171,11 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
 
     let pause = gtk::ToggleButton::builder()
         .icon_name("media-playback-pause-symbolic")
-        .tooltip_text("Pause the graph (recording continues)")
+        .tooltip_text("Pause the Graph")
         .css_classes(["flat", "circular"])
         .focus_on_click(false)
         .build();
+    pause.update_property(&[gtk::accessible::Property::Label("Pause the graph")]);
     let g = graph.clone();
     pause.connect_toggled(move |b| {
         g.set_paused(b.is_active());
@@ -211,6 +212,7 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 pub struct Readouts {
     pub root: gtk::Box,
     panel: Panel,
+    channels: gtk::Box,
     graph_bar: gtk::Box,
     lane_toggles: gtk::Box,
     controls: Rc<Controls>,
@@ -245,10 +247,8 @@ impl Readouts {
         channels.append(&b);
         panel.body.append(&channels);
 
-        let footer = gtk::Box::builder()
-            .spacing(12)
-            .css_classes(["instrument-footer"])
-            .build();
+        let footer = super::panel::footer();
+        footer.set_max_children_per_line(3);
         let (power, b) = stat("POWER");
         footer.append(&b);
         let (vin, b) = stat("INPUT");
@@ -280,6 +280,7 @@ impl Readouts {
         Self {
             root,
             panel,
+            channels: channels.clone(),
             graph_bar,
             lane_toggles,
             controls,
@@ -305,6 +306,8 @@ impl Readouts {
         let vertical = gtk::Orientation::Vertical.to_value();
         self.panel
             .narrow_layout(bp, Some(self.controls.toggle.upcast_ref()));
+        bp.add_setter(&self.channels, "orientation", Some(&vertical));
+        bp.add_setter(&self.channels, "spacing", Some(&18.to_value()));
         bp.add_setter(&self.graph_bar, "orientation", Some(&vertical));
         bp.add_setter(
             &self.lane_toggles,
@@ -340,10 +343,10 @@ impl Readouts {
             .value
             .set_label(&format!("{:.3}", f64::from(m.iout_ma) / 1000.0));
         self.power
-            .set_label(&format!("{:.3} W", f64::from(m.power_mw()) / 1000.0));
+            .set_label(&format!("{:.3}\u{202f}W", f64::from(m.power_mw()) / 1000.0));
         self.vin.set_label(&volts(m.vin_mv));
         self.temp.set_label(&format!(
-            "{:.1} °C",
+            "{:.1}\u{202f}°C",
             f64::from(m.temp1_dc.max(m.temp2_dc)) / 10.0
         ));
         self.rail.set_label(&volts(m.dc5v_mv));

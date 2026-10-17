@@ -185,6 +185,8 @@ mod imp {
         pub dirty: Cell<bool>,
         pub lanes: RefCell<Vec<Lane>>,
         pub hover_x: Cell<Option<f32>>,
+        /// When the accessible description was last brought up to date.
+        pub described_at: Cell<f64>,
     }
 
     impl Default for Graph {
@@ -199,6 +201,7 @@ mod imp {
                 dirty: Cell::new(false),
                 lanes: RefCell::new(vec![Lane::Voltage, Lane::Current, Lane::Power]),
                 hover_x: Cell::new(None),
+                described_at: Cell::new(f64::NEG_INFINITY),
             }
         }
     }
@@ -208,11 +211,21 @@ mod imp {
         const NAME: &'static str = "Dp100Graph";
         type Type = super::Graph;
         type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            // To assistive technology the graph is a picture, described in
+            // words by its latest readings.
+            klass.set_accessible_role(gtk::AccessibleRole::Img);
+        }
     }
 
     impl ObjectImpl for Graph {
         fn constructed(&self) {
             self.parent_constructed();
+            self.obj()
+                .update_property(&[gtk::accessible::Property::Label(
+                    "Graph of the output voltage, current, power and temperature",
+                )]);
             let obj = self.obj();
             obj.set_hexpand(true);
             obj.set_vexpand(true);
@@ -418,7 +431,7 @@ mod imp {
                     &[(y1, top), (y0, top + lane_h - 13.0)]
                 };
                 for &(v, y) in marks {
-                    let layout = text(&format!("{v:.dec$} {}", lane.short()), &small);
+                    let layout = text(&format!("{v:.dec$}\u{202f}{}", lane.short()), &small);
                     let (lw, _) = layout.pixel_size();
                     snap.save();
                     snap.translate(&graphene::Point::new(LEFT - 6.0 - lw as f32, y));
@@ -553,7 +566,7 @@ mod imp {
                         &lane.color(),
                         &graphene::Rect::new(x - 2.5, y - 2.5, 5.0, 5.0),
                     );
-                    let layout = text(&format!("{v:.3} {}", lane.short()), &small_bold);
+                    let layout = text(&format!("{v:.3}\u{202f}{}", lane.short()), &small_bold);
                     let (lw, lh) = layout.pixel_size();
                     let lx = if x + 8.0 + lw as f32 > w - RIGHT {
                         x - 8.0 - lw as f32
@@ -604,6 +617,17 @@ impl Graph {
             ],
         );
         imp.dirty.set(true);
+        // Once a second is enough for a screen reader, and cheap.
+        if t - imp.described_at.get() >= 1.0 {
+            imp.described_at.set(t);
+            self.update_property(&[gtk::accessible::Property::Description(&format!(
+                "Latest: {:.3} volts, {:.3} amps, {:.3} watts, {:.1} degrees",
+                f32::from(m.vout_mv) / 1000.0,
+                f32::from(m.iout_ma) / 1000.0,
+                m.power_mw() as f32 / 1000.0,
+                f32::from(m.temp1_dc) / 10.0,
+            ))]);
+        }
     }
 
     pub fn set_window(&self, secs: f64) {

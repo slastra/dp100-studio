@@ -49,9 +49,13 @@ impl Ctx {
 
     /// Toast titles are markup unless told otherwise, and these carry
     /// sequence names and step text with "<" and "&" in them.
+    ///
+    /// A single trailing period is dropped: GNOME's writing style ends no
+    /// toast with one, while many messages here come from the worker as
+    /// full sentences.
     fn plain_toast(text: &str) -> adw::Toast {
         let t = adw::Toast::builder().use_markup(false).build();
-        t.set_title(text);
+        t.set_title(text.strip_suffix('.').unwrap_or(text));
         t
     }
 
@@ -95,12 +99,14 @@ impl Ctx {
     }
 }
 
+/// Values and units are joined by a narrow no-break space (U+202F), as
+/// GNOME's typography guidelines ask, so "12.000 V" never breaks apart.
 pub fn volts(mv: u16) -> String {
-    format!("{:.3} V", f64::from(mv) / 1000.0)
+    format!("{:.3}\u{202f}V", f64::from(mv) / 1000.0)
 }
 
 pub fn amps(ma: u16) -> String {
-    format!("{:.3} A", f64::from(ma) / 1000.0)
+    format!("{:.3}\u{202f}A", f64::from(ma) / 1000.0)
 }
 
 /// Volts or amps from a spin button, as the device's milli-units.

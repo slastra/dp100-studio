@@ -17,17 +17,17 @@ const RATES: [u32; 4] = [10, 20, 50, 100];
 
 pub fn energy(mwh: f64) -> String {
     if mwh.abs() < 1000.0 {
-        format!("{mwh:.2} mWh")
+        format!("{mwh:.2}\u{202f}mWh")
     } else {
-        format!("{:.3} Wh", mwh / 1000.0)
+        format!("{:.3}\u{202f}Wh", mwh / 1000.0)
     }
 }
 
 pub fn charge(mah: f64) -> String {
     if mah.abs() < 1000.0 {
-        format!("{mah:.2} mAh")
+        format!("{mah:.2}\u{202f}mAh")
     } else {
-        format!("{:.3} Ah", mah / 1000.0)
+        format!("{:.3}\u{202f}Ah", mah / 1000.0)
     }
 }
 
@@ -78,7 +78,7 @@ impl Log {
             .child(&record_content)
             .css_classes(["pill", "record-button"])
             .valign(gtk::Align::Center)
-            .tooltip_text("Record every measurement to a new CSV file")
+            .tooltip_text("Record Every Measurement to a File")
             .build();
         let panel = Panel::new(
             &[("REC", "Recording to a file", Tone::Alert)],
@@ -162,6 +162,7 @@ impl Log {
             .subtitle_selectable(true)
             .css_classes(["property"])
             .build();
+        open.update_property(&[gtk::accessible::Property::Label("Show in Files")]);
         file.add_suffix(&open);
         rg.add(&rate);
         rg.add(&file);
@@ -327,9 +328,9 @@ mod tests {
 
     #[test]
     fn formats() {
-        assert_eq!(energy(12.345), "12.35 mWh");
-        assert_eq!(energy(1500.0), "1.500 Wh");
-        assert_eq!(charge(999.0), "999.00 mAh");
+        assert_eq!(energy(12.345), "12.35\u{202f}mWh");
+        assert_eq!(energy(1500.0), "1.500\u{202f}Wh");
+        assert_eq!(charge(999.0), "999.00\u{202f}mAh");
         assert_eq!(clock(Duration::from_secs(3723)), "01:02:03");
         assert_eq!(thousands(1_234_567), "1,234,567");
         assert_eq!(thousands(999), "999");

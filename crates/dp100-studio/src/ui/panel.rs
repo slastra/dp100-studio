@@ -48,9 +48,14 @@ impl Panel {
             .css_classes(["card", "instrument"])
             .build();
         let top = gtk::Box::builder().spacing(6).build();
-        let row = gtk::Box::builder()
-            .spacing(6)
+        // Lamps wrap onto more lines when the window is narrow.
+        let row = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .column_spacing(6)
+            .row_spacing(6)
+            .max_children_per_line(12)
             .valign(gtk::Align::Center)
+            .halign(gtk::Align::Start)
             .build();
         let lamps: Vec<gtk::Label> = lamps
             .iter()
@@ -134,11 +139,16 @@ pub fn figure(caption: &str, class: &str) -> (gtk::Label, gtk::Box) {
     (v, b)
 }
 
-/// A row of figures under a hairline, like the Monitor panel's footer.
-pub fn footer() -> gtk::Box {
-    gtk::Box::builder()
-        .spacing(12)
+/// A row of figures under a hairline, like the Monitor panel's footer. On a
+/// narrow window it wraps to two per line.
+pub fn footer() -> gtk::FlowBox {
+    gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
         .homogeneous(true)
+        .min_children_per_line(2)
+        .max_children_per_line(4)
+        .column_spacing(12)
+        .row_spacing(12)
         .css_classes(["instrument-footer"])
         .build()
 }
