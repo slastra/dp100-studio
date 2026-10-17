@@ -47,12 +47,20 @@ impl Ctx {
         let _ = self.cmds.send(c);
     }
 
+    /// Toast titles are markup unless told otherwise, and these carry
+    /// sequence names and step text with "<" and "&" in them.
+    fn plain_toast(text: &str) -> adw::Toast {
+        let t = adw::Toast::builder().use_markup(false).build();
+        t.set_title(text);
+        t
+    }
+
     pub fn toast(&self, text: &str) {
-        self.toasts.add_toast(adw::Toast::new(text));
+        self.toasts.add_toast(Self::plain_toast(text));
     }
 
     pub fn error(&self, text: &str) {
-        let t = adw::Toast::new(text);
+        let t = Self::plain_toast(text);
         t.set_timeout(8);
         t.set_priority(adw::ToastPriority::High);
         self.toasts.add_toast(t);

@@ -4,6 +4,7 @@ mod device;
 mod graph;
 mod history;
 mod log;
+mod panel;
 mod presets;
 mod readouts;
 mod sequences;
@@ -200,6 +201,7 @@ fn install_breakpoint(w: &Rc<Window>) {
         ui.update_header();
     });
     w.readouts.narrow_layout(&bp);
+    w.sequences.narrow_layout(&bp);
     w.ctx.window.add_breakpoint(bp);
 
     let views = w.views.clone();

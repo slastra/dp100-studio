@@ -111,26 +111,35 @@ progressbar.headroom.amp > trough > progress {
   transition: all 180ms ease-out;
 }
 
-.lamp.lit {
+/* A lit lamp takes its colour from what it means: ok, warn, alert, info. */
+.lamp.lit.ok {
   color: @success_color;
   border-color: alpha(@success_color, 0.6);
   background: alpha(@success_color, 0.14);
   box-shadow: 0 0 10px alpha(@success_color, 0.25);
 }
 
-/* CC, OUT and the trips each get their own colour when lit. */
-.lamp.lit:nth-child(2) {
+.lamp.lit.warn {
   color: @warning_color;
   border-color: alpha(@warning_color, 0.6);
   background: alpha(@warning_color, 0.16);
   box-shadow: 0 0 10px alpha(@warning_color, 0.3);
 }
 
-.lamp.lit:nth-child(n + 3) {
+.lamp.lit.alert {
   color: @error_color;
   border-color: alpha(@error_color, 0.6);
   background: alpha(@error_color, 0.14);
   box-shadow: 0 0 10px alpha(@error_color, 0.3);
+}
+
+/* The accent's bg/fg pair, which every theme keeps legible together; the
+   standalone accent colour can be dark on a dark theme. */
+.lamp.lit.info {
+  color: @accent_fg_color;
+  border-color: @accent_bg_color;
+  background: @accent_bg_color;
+  box-shadow: 0 0 10px alpha(@accent_bg_color, 0.45);
 }
 
 /* The power switch. Off it is a plain button; on, it glows red, so it is
@@ -217,12 +226,12 @@ button.sequence-chip {
 }
 
 button.sequence-chip {
-  background: alpha(@accent_bg_color, 0.2);
-  color: @accent_color;
+  background: @accent_bg_color;
+  color: @accent_fg_color;
 }
 
 button.sequence-chip:hover {
-  background: alpha(@accent_bg_color, 0.3);
+  background: shade(@accent_bg_color, 1.1);
 }
 
 /* ---- presets ----------------------------------------------------------- */
@@ -290,6 +299,7 @@ button.small-pill {
 
 .tile.watt { border-left-color: @dp_watt; }
 .tile.amp { border-left-color: @dp_amp; }
+.tile.volt { border-left-color: @dp_volt; }
 
 .tile-value {
   font-size: 1.7em;
@@ -314,4 +324,138 @@ button.record-button.recording {
 
 button.record-button.recording image {
   color: @error_fg_color;
+}
+
+/* ---- sequences --------------------------------------------------------- */
+
+button.seq-picker {
+  padding: 2px 8px;
+  margin-left: -8px;
+}
+
+.seq-title {
+  font-size: 1.8em;
+  font-weight: 300;
+}
+
+button.run-button {
+  padding: 6px 16px;
+  font-weight: 700;
+}
+
+button.run-button.on {
+  background: @error_bg_color;
+  color: @error_fg_color;
+  animation: live-glow 2.4s ease-in-out infinite alternate;
+}
+
+progressbar.headroom.info > trough > progress {
+  background: @accent_bg_color;
+}
+
+.issue {
+  font-size: 0.92em;
+}
+
+.issue.error image { color: @error_color; }
+.issue.warning image { color: @warning_color; }
+
+/* The timeline: a number, a rail for each enclosing repeat, and a chip. */
+.step-number {
+  margin-right: 10px;
+  font-size: 0.85em;
+  opacity: 0.45;
+}
+
+/* Rails run the full height of the row, through its padding, so the rails
+   of consecutive rows join into one line. The min-height cancels the
+   negative margins, so the box never asks for a negative size. */
+.rail {
+  min-width: 18px;
+  min-height: 24px;
+  margin-top: -12px;
+  margin-bottom: -12px;
+  border-left: 2px solid alpha(currentColor, 0.22);
+}
+
+.lamp.step-chip {
+  margin-right: 4px;
+  font-size: 0.7em;
+}
+
+/* Chips are always lit, in the colour of what they act on. */
+.lamp.lit.volt {
+  color: @dp_volt;
+  border-color: alpha(@dp_volt, 0.6);
+  background: alpha(@dp_volt, 0.14);
+  box-shadow: none;
+}
+
+.lamp.lit.amp {
+  color: @dp_amp;
+  border-color: alpha(@dp_amp, 0.6);
+  background: alpha(@dp_amp, 0.14);
+  box-shadow: none;
+}
+
+.lamp.lit.watt {
+  color: @dp_watt;
+  border-color: alpha(@dp_watt, 0.6);
+  background: alpha(@dp_watt, 0.14);
+  box-shadow: none;
+}
+
+.lamp.lit.plain {
+  color: alpha(currentColor, 0.75);
+  border-color: alpha(currentColor, 0.3);
+  background: alpha(currentColor, 0.06);
+  box-shadow: none;
+}
+
+.lamp.step-chip.lit.alert {
+  box-shadow: none;
+}
+
+/* Loop brackets are structure, not actions: neutral and dashed, so they
+   read the same in any accent colour. */
+.lamp.step-chip.lit.info {
+  color: alpha(currentColor, 0.85);
+  border: 1px dashed alpha(currentColor, 0.45);
+  background: none;
+  box-shadow: none;
+}
+
+.compact .tile-value {
+  font-size: 1.45em;
+}
+
+/* Row tools stay quiet until the row is pointed at or focused. */
+.step-row .step-tools {
+  opacity: 0.35;
+  transition: opacity 120ms ease-out;
+}
+
+.step-row:hover .step-tools,
+.step-row:focus-within .step-tools {
+  opacity: 1;
+}
+
+/* Locked while a sequence runs: no hover brightening. */
+.step-row .step-tools:disabled,
+.step-row:hover .step-tools:disabled {
+  opacity: 0.15;
+}
+
+.step-row.has-error .step-number { color: @error_color; opacity: 1; }
+.step-row.has-warning .step-number { color: @warning_color; opacity: 1; }
+
+/* The step a run is on. */
+row.step-row.current {
+  background-color: alpha(@accent_bg_color, 0.16);
+  box-shadow: inset 3px 0 0 @accent_bg_color;
+}
+
+row.step-row.current .step-number {
+  color: @accent_fg_color;
+  opacity: 1;
 }

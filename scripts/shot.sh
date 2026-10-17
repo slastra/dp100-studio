@@ -24,6 +24,8 @@ cd "$(dirname "$0")/.." || exit 1
 # sun_path caps at 108 bytes, so the runtime dir must be short.
 RT=/tmp/dps.$$
 mkdir -p "$RT"/{config,state,data} && chmod 700 "$RT"
+# SHOT_DATA=DIR seeds the app's data directory (sequences, sessions) from DIR.
+[ -n "${SHOT_DATA:-}" ] && cp -r "$SHOT_DATA"/. "$RT/data"
 # The app runs under dbus-run-session, so stop it through its parent's pid:
 # matching it by name would also hit a DP100 Studio you have open.
 trap 'pkill -TERM -P "${APP:-0}" 2>/dev/null; sleep 0.3; kill $APP $SWAY 2>/dev/null; wait 2>/dev/null; rm -rf "$RT"' EXIT
@@ -89,6 +91,13 @@ if [ -n "${SHOT_CLICKS:-}" ]; then
         XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer click left
         sleep "${SHOT_CLICK_DELAY:-1}"
     done
+fi
+# SHOT_WTYPE="-M ctrl a -m ctrl 3x" passes its words to wtype after the
+# clicks (keyboard input scoped to the nested display).
+if [ -n "${SHOT_WTYPE:-}" ]; then
+    # shellcheck disable=SC2086  # word splitting is the point
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wtype $SHOT_WTYPE
+    sleep 0.6
 fi
 XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "$OUT" || { cat "$RT/app.log" >&2; exit 1; }
 grep -v '^$' "$RT/app.log" >&2 || true

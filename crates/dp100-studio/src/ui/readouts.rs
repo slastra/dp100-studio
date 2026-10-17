@@ -17,6 +17,7 @@ use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
+use super::panel::{Panel, Tone};
 
 /// Text readouts refresh at most this often. The graph takes every sample;
 /// labels repainting at 100 Hz while recording would only cost power.
@@ -85,14 +86,14 @@ fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
 }
 
 /// The panel's status lamps, in the order a front panel would print them.
-const LAMPS: [(&str, &str); 7] = [
-    ("CV", "Regulating voltage"),
-    ("CC", "Limiting current"),
-    ("OUT", "Output on"),
-    ("OVP", "Over-voltage trip"),
-    ("OCP", "Over-current trip"),
-    ("OPP", "Over-power trip"),
-    ("OTP", "Over-temperature trip"),
+const LAMPS: [(&str, &str, Tone); 7] = [
+    ("CV", "Regulating voltage", Tone::Ok),
+    ("CC", "Limiting current", Tone::Warn),
+    ("OUT", "Output on", Tone::Alert),
+    ("OVP", "Over-voltage trip", Tone::Alert),
+    ("OCP", "Over-current trip", Tone::Alert),
+    ("OPP", "Over-power trip", Tone::Alert),
+    ("OTP", "Over-temperature trip", Tone::Alert),
 ];
 
 /// The time windows offered, in seconds.
@@ -209,14 +210,13 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 
 pub struct Readouts {
     pub root: gtk::Box,
-    top: gtk::Box,
+    panel: Panel,
     graph_bar: gtk::Box,
     lane_toggles: gtk::Box,
     controls: Rc<Controls>,
     graph: Graph,
     volts: Channel,
     amps: Channel,
-    lamps: Vec<gtk::Label>,
     power: gtk::Label,
     vin: gtk::Label,
     temp: gtk::Label,
@@ -236,39 +236,14 @@ impl Readouts {
             .build();
 
         // --- the instrument panel ---
-        let panel = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(18)
-            .css_classes(["card", "instrument"])
-            .build();
-
-        let top = gtk::Box::builder().spacing(6).build();
-        let lamp_row = gtk::Box::builder().spacing(6).build();
-        let lamps: Vec<gtk::Label> = LAMPS
-            .iter()
-            .map(|(name, tip)| {
-                let l = gtk::Label::builder()
-                    .label(*name)
-                    .css_classes(["lamp"])
-                    .tooltip_text(*tip)
-                    .valign(gtk::Align::Center)
-                    .build();
-                lamp_row.append(&l);
-                l
-            })
-            .collect();
-        top.append(&lamp_row);
-        let spacer = gtk::Box::builder().hexpand(true).build();
-        top.append(&spacer);
-        top.append(&controls.toggle);
-        panel.append(&top);
+        let panel = Panel::new(&LAMPS, Some(controls.toggle.upcast_ref()));
 
         let channels = gtk::Box::builder().spacing(28).homogeneous(true).build();
         let (volts, b) = Channel::new("VOLTAGE", "V", "volt");
         channels.append(&b);
         let (amps, b) = Channel::new("CURRENT", "A", "amp");
         channels.append(&b);
-        panel.append(&channels);
+        panel.body.append(&channels);
 
         let footer = gtk::Box::builder()
             .spacing(12)
@@ -280,8 +255,8 @@ impl Readouts {
         footer.append(&b);
         let (temp, b) = stat("TEMPERATURE");
         footer.append(&b);
-        panel.append(&footer);
-        root.append(&panel);
+        panel.body.append(&footer);
+        root.append(&panel.root);
 
         root.append(&controls.setpoint);
 
@@ -304,14 +279,13 @@ impl Readouts {
 
         Self {
             root,
-            top,
+            panel,
             graph_bar,
             lane_toggles,
             controls,
             graph,
             volts,
             amps,
-            lamps,
             power,
             vin,
             temp,
@@ -329,13 +303,8 @@ impl Readouts {
     /// under the time windows.
     pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
         let vertical = gtk::Orientation::Vertical.to_value();
-        bp.add_setter(&self.top, "orientation", Some(&vertical));
-        bp.add_setter(&self.top, "spacing", Some(&12.to_value()));
-        bp.add_setter(
-            &self.controls.toggle,
-            "halign",
-            Some(&gtk::Align::Fill.to_value()),
-        );
+        self.panel
+            .narrow_layout(bp, Some(self.controls.toggle.upcast_ref()));
         bp.add_setter(&self.graph_bar, "orientation", Some(&vertical));
         bp.add_setter(
             &self.lane_toggles,
@@ -349,12 +318,7 @@ impl Readouts {
     }
 
     fn lamp(&self, k: usize, lit: bool) {
-        let l = &self.lamps[k];
-        if lit {
-            l.add_css_class("lit");
-        } else {
-            l.remove_css_class("lit");
-        }
+        self.panel.lamp(k, lit);
     }
 
     pub fn show_sample(&self, at: Instant, m: &BasicInfo) {
