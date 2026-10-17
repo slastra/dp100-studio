@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### DP100 Studio
+
+- `--simulate` powers a simulated microcontroller board instead of a
+  resistor, so the graph shows what a real load does: radio bursts, a boot
+  spike, and a brownout below 2.9 V.
+
+### dp100 crate and CLI
+
+- `sim::Board`: a simulated ESP32-class board load, with a power LED,
+  brownout and boot thresholds, and radio bursts.
+
 ## [0.1.0] - 2026-10-17
 
 The first release.

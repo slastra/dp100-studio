@@ -34,6 +34,12 @@ cat > "$RT/sway.conf" <<CONF
 default_border none
 output HEADLESS-1 resolution $SIZE
 CONF
+# SHOT_WINDOW=WxH floats the app at that size in the top-left corner and
+# captures only it, for a window smaller than the output (nested sway's
+# output is the host window's size).
+if [ -n "${SHOT_WINDOW:-}" ]; then
+    echo "for_window [app_id=\".*\"] floating enable, resize set ${SHOT_WINDOW%x*} ${SHOT_WINDOW#*x}, move position 0 0" >>"$RT/sway.conf"
+fi
 
 if [ -n "${SHOT_NESTED:-}" ]; then
     # Nested: sway runs as a window on the host (Hyprland floats it at
@@ -102,6 +108,8 @@ if [ -n "${SHOT_WTYPE:-}" ]; then
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wtype $SHOT_WTYPE
     sleep 0.6
 fi
-XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "$OUT" || { cat "$RT/app.log" >&2; exit 1; }
+GEOM=()
+[ -n "${SHOT_WINDOW:-}" ] && GEOM=(-g "0,0 $SHOT_WINDOW")
+XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "${GEOM[@]}" "$OUT" || { cat "$RT/app.log" >&2; exit 1; }
 grep -v '^$' "$RT/app.log" >&2 || true
 echo "$OUT"

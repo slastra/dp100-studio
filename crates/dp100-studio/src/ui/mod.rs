@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use dp100::sim::{SimDevice, State};
+use dp100::sim::{Board, SimDevice, State};
 use dp100::{Fault, Mode};
 use gtk::{gdk, gio, glib};
 
@@ -128,10 +128,10 @@ fn save_window_state(win: &adw::ApplicationWindow) {
 }
 
 /// A simulated unit that looks like a bench in use: output on at 5 V into a
-/// 100 Ω load, so it sits in CV at 50 mA.
+/// microcontroller board, so it sits in CV with the board's radio bursts.
 fn demo_sim() -> Source {
     let mut s = State::default();
-    s.load_ohms = Some(100.0);
+    s.board = Some(Board::new());
     s.noise = true;
     s.live.vset_mv = 5_000;
     s.live.iset_ma = 100;

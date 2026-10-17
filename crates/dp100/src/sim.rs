@@ -4,6 +4,8 @@
 //! app need to be tested against: ten presets with preset 0 active at boot,
 //! the live output, a resistive load (so CC and CV both happen), protection
 //! trips that latch, a missing input supply, and the firmware's preset-0 bug.
+//! For demos it can instead drive a [`Board`], which draws the way a real
+//! microcontroller board does.
 //! A [`SimHandle`] reaches into the running simulation to change the load,
 //! pull the input, inject transport faults, or inspect what was written.
 //!
@@ -12,7 +14,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::crc::crc16;
 use crate::error::{Error, Result};
@@ -52,6 +54,8 @@ pub struct State {
     pub vin_mv: u16,
     /// `None` is an open circuit.
     pub load_ohms: Option<f64>,
+    /// A microcontroller board on the output instead of the resistor.
+    pub board: Option<Board>,
     pub fault: Fault,
     pub temp_dc: i16,
     /// Reproduce the firmware bug where activating a preset while preset 0
@@ -100,6 +104,7 @@ impl Default for State {
             system: [0x50, 0x00, 0x1a, 0x04, 0x02, 0x02, 0x01, 0x00],
             vin_mv: 9_108,
             load_ohms: None,
+            board: None,
             fault: Fault::Ok,
             temp_dc: 281,
             preset0_bug: false,
@@ -117,6 +122,106 @@ impl Default for State {
     }
 }
 
+/// A microcontroller dev board (ESP32-class) on the output, so a demo's
+/// graph looks like a real bench rather than a resistor's flat line.
+///
+/// It has a power LED that starts to glow near 1.9 V, and a regulator
+/// feeding a chip that resets below 2.9 V and boots again above 3.1 V, so a
+/// voltage sweep shows a brownout. Booting draws a calibration burst, and
+/// once up the chip idles at about 31 mA with irregular radio bursts and a
+/// longer transmit every 5 s. It stays under 100 mA.
+#[derive(Debug, Clone)]
+pub struct Board {
+    started: Instant,
+    /// When the chip last came out of reset; `None` while it is held there.
+    booted: Option<Instant>,
+    /// What it draws at the present supply, in mA.
+    demand_ma: f64,
+}
+
+impl Default for Board {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Board {
+    /// Series resistance between the regulation point and the board, so
+    /// the voltage dips a few millivolts under load.
+    const WIRING_OHMS: f64 = 0.05;
+
+    pub fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            booted: None,
+            demand_ma: 0.0,
+        }
+    }
+
+    /// Brings the board up to `now` with `supply_mv` across it.
+    fn update(&mut self, supply_mv: u16, now: Instant) {
+        let v = f64::from(supply_mv);
+        if v >= 3_100.0 {
+            self.booted.get_or_insert(now);
+        } else if v < 2_900.0 {
+            self.booted = None;
+        }
+        // mV / Ω = mA.
+        let led = ((v - 1_900.0) / 680.0).max(0.0);
+        let chip = self.booted.map_or(0.0, |b| {
+            chip_ma(
+                now.saturating_duration_since(b).as_secs_f64(),
+                now.saturating_duration_since(self.started).as_secs_f64(),
+            )
+        });
+        self.demand_ma = led + chip;
+    }
+}
+
+/// The chip's draw `up` seconds after reset, `t` seconds into the run.
+fn chip_ma(up: f64, t: f64) -> f64 {
+    if up < 0.35 {
+        // Boot: flash and clocks, then RF calibration.
+        return if (0.15..0.21).contains(&up) {
+            94.0
+        } else {
+            52.0
+        };
+    }
+    let idle = 31.0 + 1.2 * (t * 0.37).sin();
+    // Radio bursts: a third of 200 ms slots get one, at a varying offset,
+    // length and height, as beacons and traffic do.
+    const SLOT: f64 = 0.2;
+    let slot = (t / SLOT) as u64;
+    let r = mix(slot);
+    let at = t - slot as f64 * SLOT;
+    let start = (r % 120) as f64 / 1000.0;
+    let len = (15 + (r >> 8) % 40) as f64 / 1000.0;
+    let burst = if (r >> 20).is_multiple_of(3) && (start..start + len).contains(&at) {
+        30.0 + ((r >> 24) % 25) as f64
+    } else {
+        0.0
+    };
+    let transmit = if t % 5.0 < 0.15 { 58.0 } else { 0.0 };
+    idle + burst.max(transmit)
+}
+
+/// SplitMix64: a well-spread hash of a slot number.
+fn mix(x: u64) -> u64 {
+    let mut z = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// What the output would sit at if nothing limited the current.
+fn supply_mv(s: &State) -> u16 {
+    if s.vin_mv < 4_000 || !s.output_on || s.fault != Fault::Ok {
+        return 0;
+    }
+    s.live.vset_mv.min(s.vin_mv.saturating_sub(HEADROOM_MV))
+}
+
 /// Measured output for the present state: (vout_mv, iout_ma, mode byte).
 fn measure(s: &State) -> (u16, u16, u8) {
     if s.vin_mv < 4_000 {
@@ -125,8 +230,19 @@ fn measure(s: &State) -> (u16, u16, u8) {
     if !s.output_on || s.fault != Fault::Ok {
         return (0, 0, 2);
     }
-    let vo_max = s.vin_mv.saturating_sub(HEADROOM_MV);
-    let vset = s.live.vset_mv.min(vo_max);
+    let vset = supply_mv(s);
+    if let Some(b) = &s.board {
+        let want = b.demand_ma;
+        let iset = f64::from(s.live.iset_ma);
+        return if want <= iset {
+            let v = (f64::from(vset) - want * Board::WIRING_OHMS).max(0.0);
+            (v.round() as u16, want.round() as u16, 1)
+        } else {
+            // Held at the limit, the board's voltage sags.
+            let v = f64::from(vset) * iset / want;
+            (v.round() as u16, s.live.iset_ma, 0)
+        };
+    }
     match s.load_ohms {
         None => (vset, 0, 1),
         Some(r) => {
@@ -177,6 +293,10 @@ impl State {
     }
 
     fn basic_info(&mut self) -> Vec<u8> {
+        let supply = supply_mv(self);
+        if let Some(b) = &mut self.board {
+            b.update(supply, Instant::now());
+        }
         self.check_protection();
         let (mut v, mut i, mode) = measure(self);
         if self.noise && v > 0 {
@@ -470,5 +590,39 @@ impl Transport for SimDevice {
             return Err(Error::Disconnected);
         }
         Ok(s.queue.pop_front())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn board_browns_out_and_boots_again() {
+        let mut b = Board::new();
+        let t0 = b.started;
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        b.update(1_500, at(0.0));
+        assert_eq!(b.demand_ma, 0.0, "below the LED's threshold");
+        b.update(2_500, at(0.1));
+        assert!(b.demand_ma > 0.0 && b.demand_ma < 2.0, "only the LED");
+        b.update(3_200, at(1.0));
+        assert!(b.booted.is_some());
+        assert!(b.demand_ma > 50.0, "booting");
+        b.update(3_000, at(2.0));
+        assert!(b.booted.is_some(), "hysteresis keeps it running");
+        assert!((25.0..100.0).contains(&b.demand_ma));
+        b.update(2_800, at(3.0));
+        assert!(b.booted.is_none(), "brownout");
+        assert!(b.demand_ma < 2.0);
+    }
+
+    #[test]
+    fn board_stays_under_100_ma() {
+        for k in 0..20_000 {
+            let t = f64::from(k) / 1000.0;
+            let i = chip_ma(t, t) + (5_000.0 - 1_900.0) / 680.0;
+            assert!(i < 100.0, "{i} mA at {t} s");
+        }
     }
 }
