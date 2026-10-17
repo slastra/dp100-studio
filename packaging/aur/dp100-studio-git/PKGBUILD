@@ -9,7 +9,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/slastra/dp100-studio'
 # The app is GPL; the bundled dp100 command-line tool is MIT or Apache-2.0.
 license=('GPL-3.0-or-later' 'MIT OR Apache-2.0')
-depends=('gtk4' 'libadwaita' 'glib2' 'gcc-libs' 'glibc')
+depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'graphene' 'libgcc' 'glibc' 'hicolor-icon-theme')
 makedepends=('cargo' 'git')
 provides=('dp100-studio')
 conflicts=('dp100-studio')
