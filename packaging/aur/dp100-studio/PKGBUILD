@@ -12,7 +12,7 @@ depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'graphene' 'libgcc' 'glibc' 'hicolo
 makedepends=('cargo')
 install=dp100-studio.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('e0ab8e7ed2490ea570e0ea19cf4b28b06bbaa28310b6489b90fad777cf30885d')
 _srcdir="$pkgname-$pkgver"
 
 prepare() {
