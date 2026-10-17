@@ -9,6 +9,7 @@ use dp100::{BasicInfo, DeviceInfo, Setpoints, SystemSettings};
 use gtk::glib;
 
 use super::ctx::{Ctx, milli, volts};
+use super::page::Page;
 use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
@@ -93,7 +94,7 @@ fn spin(title: &str, subtitle: &str, min: f64, max: f64, step: f64, digits: u32)
 }
 
 pub struct Device {
-    pub root: adw::PreferencesPage,
+    pub root: Page,
     protection: Rc<Form>,
     ovp: adw::SpinRow,
     ocp: adw::SpinRow,
@@ -134,7 +135,7 @@ const LAMPS: [(&str, &str, Tone); 3] = [
 
 impl Device {
     pub fn new(ctx: Rc<Ctx>, simulated: bool) -> Rc<Self> {
-        let root = adw::PreferencesPage::new();
+        let root = Page::new();
 
         // --- the unit, as a panel ---
         let release = gtk::Button::builder()

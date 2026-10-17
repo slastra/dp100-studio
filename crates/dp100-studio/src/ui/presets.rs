@@ -7,6 +7,7 @@ use adw::prelude::*;
 use dp100::Setpoints;
 
 use super::ctx::{Ctx, amps, milli, volts};
+use super::page::Page;
 use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
@@ -91,7 +92,7 @@ impl Card {
 }
 
 pub struct Presets {
-    pub root: adw::PreferencesPage,
+    pub root: Page,
     panel: Panel,
     title: gtk::Label,
     figures: [gtk::Label; 4],
@@ -102,7 +103,7 @@ pub struct Presets {
 
 impl Presets {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = adw::PreferencesPage::new();
+        let root = Page::new();
 
         // --- the panel: a memory lamp per preset, the active one lit ---
         let lamps: Vec<(String, String)> = (1..=9)

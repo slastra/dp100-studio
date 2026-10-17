@@ -25,6 +25,7 @@ use gtk::{gio, glib};
 
 use super::ctx::Ctx;
 use super::log::clock;
+use super::page::Page;
 use super::panel::{Panel, Tone, figure, footer};
 use crate::seq::exec::{Outcome, Status};
 use crate::seq::schema::{Cmp, Dur, Metric, OnAbort, OnTimeout, RampTarget, Sequence, Step};
@@ -147,7 +148,7 @@ struct Figure {
 }
 
 pub struct Sequences {
-    pub root: adw::PreferencesPage,
+    pub root: Page,
     panel: Panel,
     run: gtk::Button,
     run_content: adw::ButtonContent,
@@ -178,7 +179,7 @@ pub struct Sequences {
 
 impl Sequences {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = adw::PreferencesPage::new();
+        let root = Page::new();
 
         // --- the run panel ---
         let run_content = adw::ButtonContent::builder()
@@ -411,7 +412,7 @@ impl Sequences {
             })
             .build();
         actions.add_action_entries([add_action]);
-        p.root.insert_action_group("seq", Some(&actions));
+        p.root.widget().insert_action_group("seq", Some(&actions));
 
         let w = Rc::downgrade(&p);
         p.picker_list.connect_row_activated(move |_, row| {

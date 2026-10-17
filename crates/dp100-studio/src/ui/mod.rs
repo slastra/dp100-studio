@@ -4,6 +4,7 @@ mod device;
 mod graph;
 mod history;
 mod log;
+mod page;
 mod panel;
 mod presets;
 mod readouts;
@@ -531,26 +532,31 @@ fn build(
 
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
-        &readouts.root,
+        readouts.root.widget(),
         Some("monitor"),
         "Monitor",
         "utilities-system-monitor-symbolic",
     );
     views.add_titled_with_icon(
-        &presets.root,
+        presets.root.widget(),
         Some("presets"),
         "Presets",
         "view-list-symbolic",
     );
     views.add_titled_with_icon(
-        &sequences.root,
+        sequences.root.widget(),
         Some("sequences"),
         "Sequences",
         "media-playlist-repeat-symbolic",
     );
-    views.add_titled_with_icon(&log.root, Some("log"), "Log", "media-record-symbolic");
     views.add_titled_with_icon(
-        &device.root,
+        log.root.widget(),
+        Some("log"),
+        "Log",
+        "media-record-symbolic",
+    );
+    views.add_titled_with_icon(
+        device.root.widget(),
         Some("device"),
         "Device",
         "preferences-system-symbolic",

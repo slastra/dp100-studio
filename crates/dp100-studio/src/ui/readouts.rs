@@ -17,6 +17,7 @@ use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
+use super::page::Page;
 use super::panel::{Panel, Tone};
 
 /// Text readouts refresh at most this often. The graph takes every sample;
@@ -218,7 +219,7 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 }
 
 pub struct Readouts {
-    pub root: adw::PreferencesPage,
+    pub root: Page,
     panel: Panel,
     channels: gtk::Box,
     graph_bar: gtk::FlowBox,
@@ -242,7 +243,7 @@ impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
         // A preferences page like the others, so every page has the same
         // width and margins.
-        let root = adw::PreferencesPage::new();
+        let root = Page::new();
         let group = |w: &gtk::Widget| {
             let g = adw::PreferencesGroup::new();
             g.add(w);
