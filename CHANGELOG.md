@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `dp100-studio` app shell: live readouts (voltage, current, power, mode,
+  setpoints, protection, input, temperatures), connection status, hotplug,
+  and warnings for permission problems, a busy device, trips and missing
+  input. `--simulate` runs it against a simulated DP100.
 - `dp100` crate: frame codec, hidraw transport, device discovery, and a
   `Device` with read-modify-write setpoint and output control.
 - Presets (read, save, activate), protection limits, system settings and

@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/dp100"]
+members = ["crates/dp100", "crates/dp100-studio"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Shaun Lastra <shaun@lastra.us>"]
 repository = "https://github.com/slastra/dp100-studio"
 

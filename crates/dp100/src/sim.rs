@@ -322,6 +322,17 @@ impl SimDevice {
 }
 
 impl SimHandle {
+    /// Another transport onto the same simulated unit, as after a replug.
+    pub fn device(&self) -> SimDevice {
+        SimDevice {
+            state: self.state.clone(),
+        }
+    }
+
+    pub fn is_unplugged(&self) -> bool {
+        self.lock().unplugged
+    }
+
     pub fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }

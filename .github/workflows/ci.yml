@@ -44,3 +44,27 @@ jobs:
       # Hardware tests are #[ignore]d and need DP100_HIL=1; they never run here.
       - name: Package
         run: cargo package -p dp100 --allow-dirty
+
+  # Pinned rather than ubuntu-latest: 24.04 ships GTK 4.14 and libadwaita
+  # 1.5, the floors the app's feature flags are set to. A newer image would
+  # let an accidental use of a newer API through.
+  app:
+    name: dp100-studio
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-4-dev libadwaita-1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy -p dp100-studio --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test -p dp100-studio
+      - name: Clippy (release)
+        run: cargo clippy -p dp100-studio --all-targets --release -- -D warnings

@@ -1,0 +1,45 @@
+.figure {
+  padding: 12px 16px;
+}
+
+.figure-value {
+  font-size: 2.4em;
+  font-weight: 300;
+}
+
+.numeric {
+  font-feature-settings: "tnum";
+}
+
+.mode-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: bold;
+}
+
+.mode-badge.cv {
+  background: alpha(@success_color, 0.18);
+  color: @success_color;
+}
+
+.mode-badge.cc {
+  background: alpha(@warning_color, 0.2);
+  color: @warning_color;
+}
+
+.mode-badge.fault {
+  background: alpha(@error_color, 0.2);
+  color: @error_color;
+}
+
+.mode-badge.off {
+  background: alpha(currentColor, 0.1);
+}
+
+.output-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: bold;
+  background: @error_bg_color;
+  color: @error_fg_color;
+}

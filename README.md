@@ -4,15 +4,15 @@ A native Linux app for the ALIENTEK DP100 USB-C bench power supply, built with
 GTK 4 and libadwaita.
 
 > [!WARNING]
-> Early development. The protocol library and CLI work; the desktop app is not
-> written yet.
+> Early development. The protocol library and CLI work. The desktop app shows
+> live readouts but has no controls yet.
 
 ## What's here
 
 | Crate | What | License |
 |---|---|---|
 | [`dp100`](crates/dp100) | Protocol library and `dp100` command-line tool | MIT OR Apache-2.0 |
-| `dp100-studio` | The desktop app (in progress) | GPL-3.0-or-later |
+| [`dp100-studio`](crates/dp100-studio) | The desktop app (in progress) | GPL-3.0-or-later |
 
 The protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
@@ -28,6 +28,17 @@ sudo udevadm control --reload
 
 Then unplug and replug the DP100. Put it in USBD mode (double-tap ◀ on the
 panel) so it talks to the computer.
+
+## App
+
+```sh
+cargo run -p dp100-studio              # finds the DP100 on its own
+cargo run -p dp100-studio -- --simulate  # a simulated DP100, no hardware needed
+```
+
+It connects read-only: opening the app never changes anything on the supply.
+Only one program can talk to the DP100 at a time, so the app waits while the
+CLI has it and connects as soon as it is free.
 
 ## CLI
 
@@ -54,7 +65,7 @@ driving a power supply. Check what's connected before you enable the output.
 
 ## Building
 
-Rust 1.85 or newer. The library needs nothing else. The app will need GTK 4.14
+Rust 1.88 or newer. The library needs nothing else. The app needs GTK 4.14
 and libadwaita 1.5 or newer.
 
 ```sh

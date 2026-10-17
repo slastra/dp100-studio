@@ -1,0 +1,25 @@
+[package]
+name = "dp100-studio"
+description = "Desktop app for the ALIENTEK DP100 USB-C bench power supply"
+license = "GPL-3.0-or-later"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+dp100 = { path = "../dp100", features = ["sim"] }
+# The feature floors are what Ubuntu 24.04 ships (GTK 4.14, libadwaita 1.5),
+# so CI builds against real system libraries. Anything newer has to wait or
+# be feature-gated.
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+# Worker to UI: async, so the GTK main loop awaits it without polling.
+async-channel = "2"
+# UI to worker: the worker blocks on it with a deadline between polls.
+crossbeam-channel = "0.5"
+
+[lints]
+workspace = true

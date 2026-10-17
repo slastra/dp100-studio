@@ -24,3 +24,18 @@ pub trait Transport: Send {
         Ok(n)
     }
 }
+
+/// Lets callers pick a transport at runtime (`Box<dyn Transport>`).
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn write_report(&mut self, report: &[u8; REPORT_LEN]) -> Result<()> {
+        (**self).write_report(report)
+    }
+
+    fn read_report(&mut self, timeout: Duration) -> Result<Option<[u8; REPORT_LEN]>> {
+        (**self).read_report(timeout)
+    }
+
+    fn drain(&mut self) -> Result<usize> {
+        (**self).drain()
+    }
+}
