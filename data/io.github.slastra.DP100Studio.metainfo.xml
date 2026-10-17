@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.slastra.DP100Studio</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>DP100 Studio</name>
+  <summary>Control and monitor the ALIENTEK DP100 power supply</summary>
+  <developer id="io.github.slastra">
+    <name>Shaun Lastra</name>
+  </developer>
+  <description>
+    <p>
+      DP100 Studio drives the ALIENTEK DP100 USB-C bench power supply over USB:
+      watch it live, change its output, program its presets, record what it
+      delivers, and run step sequences.
+    </p>
+    <ul>
+      <li>Live voltage, current and power, with lamps for constant voltage, constant current and every protection trip</li>
+      <li>A graph of up to an hour of measurements at 100 samples a second that never hides a spike</li>
+      <li>Setpoints that apply as you change them, and an output switch that asks before turning on</li>
+      <li>The device's nine preset memories, to edit and recall</li>
+      <li>Recording to CSV, with energy and charge delivered</li>
+      <li>Sequences of steps such as ramps, waits and waiting for a condition, checked against the supply's limits before they run</li>
+    </ul>
+    <p>
+      DP100 Studio is not affiliated with or endorsed by ALIENTEK.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.slastra.DP100Studio.desktop</launchable>
+  <provides>
+    <binary>dp100-studio</binary>
+    <binary>dp100</binary>
+    <modalias>usb:v2E3CpAF01*</modalias>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <categories>
+    <category>Electronics</category>
+    <category>Engineering</category>
+  </categories>
+  <keywords>
+    <keyword>DP100</keyword>
+    <keyword>ALIENTEK</keyword>
+    <keyword>Point Atom</keyword>
+    <keyword>power supply</keyword>
+    <keyword>bench supply</keyword>
+  </keywords>
+  <url type="homepage">https://github.com/slastra/dp100-studio</url>
+  <url type="bugtracker">https://github.com/slastra/dp100-studio/issues</url>
+  <url type="vcs-browser">https://github.com/slastra/dp100-studio</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Live readings and the graph during a voltage sweep</caption>
+      <image>https://raw.githubusercontent.com/slastra/dp100-studio/main/docs/screenshots/monitor.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A sequence running</caption>
+      <image>https://raw.githubusercontent.com/slastra/dp100-studio/main/docs/screenshots/sequence-running.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Editing a sequence</caption>
+      <image>https://raw.githubusercontent.com/slastra/dp100-studio/main/docs/screenshots/sequences.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The supply's preset memories</caption>
+      <image>https://raw.githubusercontent.com/slastra/dp100-studio/main/docs/screenshots/presets.png</image>
+    </screenshot>
+    <screenshot environment="gnome:dark">
+      <caption>In the dark style</caption>
+      <image>https://raw.githubusercontent.com/slastra/dp100-studio/main/docs/screenshots/monitor-dark.png</image>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#99c1f1</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-17">
+      <description>
+        <p>The first release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

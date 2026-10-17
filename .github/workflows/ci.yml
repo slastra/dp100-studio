@@ -57,7 +57,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libgtk-4-dev libadwaita-1-dev
+            libgtk-4-dev libadwaita-1-dev appstream desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -68,3 +68,7 @@ jobs:
         run: cargo test -p dp100-studio
       - name: Clippy (release)
         run: cargo clippy -p dp100-studio --all-targets --release -- -D warnings
+      - name: Desktop entry and metainfo
+        run: |
+          desktop-file-validate data/io.github.slastra.DP100Studio.desktop
+          appstreamcli validate --no-net data/io.github.slastra.DP100Studio.metainfo.xml

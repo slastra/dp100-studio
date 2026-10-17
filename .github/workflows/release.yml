@@ -1,0 +1,46 @@
+name: Release
+
+# Pushing a tag like v0.1.0 checks the tree once more and publishes a GitHub
+# release with that version's notes from CHANGELOG.md. The AUR packages are
+# updated by hand from packaging/aur.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-4-dev libadwaita-1-dev appstream desktop-file-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --workspace --all-features
+      - name: Version matches the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo pkgid -p dp100-studio | sed 's/.*[#@]//')
+          test "$tag" = "$crate" || { echo "tag $tag but crate $crate"; exit 1; }
+          grep -q "release version=\"$tag\"" data/io.github.slastra.DP100Studio.metainfo.xml \
+            || { echo "metainfo has no release $tag"; exit 1; }
+      - name: Release notes from the changelog
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v v="$tag" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $tag"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "DP100 Studio ${GITHUB_REF_NAME#v}" --notes-file notes.md

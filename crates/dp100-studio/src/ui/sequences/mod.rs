@@ -263,7 +263,7 @@ impl Sequences {
                 .first_child()
                 .and_downcast::<gtk::Label>()
                 .expect("figure starts with its caption");
-            foot.append(&b);
+            super::panel::add_to_flow(&foot, &b);
             Figure {
                 tile: b,
                 caption,

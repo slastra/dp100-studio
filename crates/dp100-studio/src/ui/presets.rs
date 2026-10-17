@@ -137,7 +137,7 @@ impl Presets {
         foot.add_css_class("compact");
         let fig = |caption: &str, class: &str| {
             let (v, b) = figure(caption, class);
-            foot.append(&b);
+            super::panel::add_to_flow(&foot, &b);
             v
         };
         let figures = [

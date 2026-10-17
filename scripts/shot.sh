@@ -64,6 +64,9 @@ DISP=$(basename "$SOCK")
 # and stock Adwaita styling with it.
 WRAP=
 case " $* " in *" --simulate "*) ;; *) WRAP="dbus-run-session --" ;; esac
+# SHOT_STOCK=1 forces the private bus anyway, for screenshots in stock
+# Adwaita styling (no desktop theme, font or accent) as most users see it.
+[ -n "${SHOT_STOCK:-}" ] && WRAP="dbus-run-session --"
 env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" GDK_BACKEND=wayland \
     XDG_CONFIG_HOME="$RT/config" XDG_STATE_HOME="$RT/state" XDG_DATA_HOME="$RT/data" \
     $WRAP "$BIN" "$@" >"$RT/app.log" 2>&1 &

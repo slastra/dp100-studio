@@ -457,6 +457,7 @@ row.step-row.current {
 }
 
 row.step-row.current .step-number {
-  color: @accent_fg_color;
+  color: @accent_bg_color;
+  font-weight: 800;
   opacity: 1;
 }

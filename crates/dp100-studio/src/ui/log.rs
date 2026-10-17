@@ -105,11 +105,11 @@ impl Log {
 
         let foot = footer();
         let (energy, b) = figure("ENERGY", "watt");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         let (charge, b) = figure("CHARGE", "amp");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         let (covered, b) = figure("MEASURED FOR", "plain");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         panel.body.append(&foot);
 
         let reset = gtk::Button::builder()

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=DP100 Studio
+GenericName=Bench Power Supply
+Comment=Control and monitor the ALIENTEK DP100 power supply
+Exec=dp100-studio
+Icon=io.github.slastra.DP100Studio
+Terminal=false
+Categories=Electronics;Engineering;Development;
+Keywords=DP100;ALIENTEK;ATK-DP100;Point Atom;正点原子;power supply;bench;PSU;voltage;current;
+StartupNotify=true
+StartupWMClass=io.github.slastra.DP100Studio
+SingleMainWindow=true

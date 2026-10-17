@@ -170,13 +170,13 @@ impl Device {
         panel.body.append(&head);
         let foot = footer();
         let (vin, b) = figure("INPUT", "plain");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         let (vo_max, b) = figure("AVAILABLE", "volt");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         let (temp, b) = figure("TEMPERATURE", "heat");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         let (rail, b) = figure("5 V RAIL", "plain");
-        foot.append(&b);
+        super::panel::add_to_flow(&foot, &b);
         foot.add_css_class("compact");
         panel.body.append(&foot);
         let hg = adw::PreferencesGroup::new();

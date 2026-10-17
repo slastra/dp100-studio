@@ -3,48 +3,79 @@
 A native Linux app for the ALIENTEK DP100 USB-C bench power supply, built with
 GTK 4 and libadwaita.
 
-> [!WARNING]
-> Early development. The protocol library, CLI and desktop app work: live
-> readouts and graph, controls, presets, logging and sequences. Packaging is
-> next.
+![DP100 Studio showing live readings and the graph during a voltage sweep](docs/screenshots/monitor.png)
 
-## What's here
+The DP100 is also sold as the ATK-DP100, and listings translated from Chinese
+call it the "Point Atom DP100 CNC power supply" (正点原子 DP100 数控电源). They
+are all the same unit.
 
-| Crate | What | License |
-|---|---|---|
-| [`dp100`](crates/dp100) | Protocol library and `dp100` command-line tool | MIT OR Apache-2.0 |
-| [`dp100-studio`](crates/dp100-studio) | The desktop app (in progress) | GPL-3.0-or-later |
+## Features
 
-The protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+- **Monitor**: live voltage, current and power, with lamps for CV, CC, the
+  output and every protection trip, and a graph of up to an hour at 100
+  samples a second that keeps every spike visible at any zoom.
+- **Control**: setpoints that apply as you change them, an output switch that
+  asks before turning on (F9 turns it off from anywhere), and protection
+  limits.
+- **Presets**: edit and recall the supply's nine memories.
+- **Sequences**: steps such as ramps, waits, and waiting for a measurement to
+  meet a condition, checked against the supply's limits before they run.
+- **Log**: record every measurement to CSV, with energy and charge delivered.
+- **Device**: panel, safety and protection settings, and a button to hand the
+  front panel back to the DP100.
+- A `dp100` command-line tool and a Rust library for the protocol.
 
-## Device access
+<p>
+  <img src="docs/screenshots/sequence-running.png" width="49%" alt="A sequence running">
+  <img src="docs/screenshots/presets.png" width="49%" alt="The preset memories">
+</p>
 
-The DP100 shows up as a hidraw node that only root can open. Install the udev
-rule so the logged-in user can:
+## Install
+
+On Arch Linux, from the AUR:
+
+```sh
+yay -S dp100-studio        # the latest release
+yay -S dp100-studio-git    # or the development version
+```
+
+The package installs a udev rule that lets you open the DP100 without root.
+Unplug and replug it after installing, then put it in **USBD mode** by
+double-tapping ◀ on its panel, which it needs after every power-up.
+
+### From source
+
+Needs Rust 1.88 or newer, GTK 4.14 and libadwaita 1.5 or newer.
+
+```sh
+cargo run --release -p dp100-studio
+cargo run -p dp100-studio -- --simulate   # a simulated DP100, no hardware needed
+```
+
+<a id="device-access"></a>
+Without the package, install the udev rule yourself so a normal user can open
+the device:
 
 ```sh
 sudo install -m 644 data/udev/70-dp100.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 ```
 
-Then unplug and replug the DP100. Put it in USBD mode (double-tap ◀ on the
-panel) so it talks to the computer.
+Then unplug and replug the DP100.
 
-## App
+## Using it
 
-```sh
-cargo run -p dp100-studio              # finds the DP100 on its own
-cargo run -p dp100-studio -- --simulate  # a simulated DP100, no hardware needed
-```
+The app connects read-only: opening it never changes anything on the supply.
+Only one program can talk to the DP100 at a time, so the app waits while
+another has it and connects as soon as it is free.
 
-It connects read-only: opening the app never changes anything on the supply.
-Turning the output on always asks first; turning it off never does, and F9
-does it from anywhere. Only one program can talk to the DP100 at a time, so
-the app waits while the CLI has it and connects as soon as it is free.
+While the app is connected, the DP100's own buttons are locked; the firmware
+does this whenever a computer is polling it. **Release Panel** on the Device
+page hands the panel back, and **Reconnect** takes it again.
 
-While the app is connected the DP100's own buttons are locked (the firmware
-does this whenever a computer is polling it). Use **Release Front Panel** in
-the menu to hand the panel back, and **Reconnect** to take it again.
+The DP100 can only output a little less than its input. On a 9 V USB-C
+charger that's about 8.8 V. A 20 V PD charger gives about 19.7 V, and the full
+30 V needs a DC adapter of up to 32 V on the barrel jack.
 
 ## Sequences
 
@@ -64,7 +95,7 @@ leave it.
 ## CLI
 
 ```sh
-cargo run -p dp100 --features cli -- status
+dp100 status
 ```
 
 ```
@@ -75,23 +106,27 @@ temp     28.1 / 27.6 °C   5V rail 5.07 V   fault ok
 ```
 
 `dp100 --help` lists the rest: `watch` streams measurements at up to 100 Hz,
-`set` changes setpoints, `on` asks before it enables the output.
+`set` changes setpoints, and `on` asks before it enables the output.
 
 ## Safety
 
-The library never changes device state on its own. Opening, reading and
+The software never changes device state on its own. Opening, reading and
 watching send only read requests; setpoint changes leave the output as it was;
-`on` is never implied by anything else. Even so, this is unofficial software
-driving a power supply. Check what's connected before you enable the output.
+nothing turns the output on except an explicit request. Every write is checked
+by reading it back. Even so, this is unofficial software driving a power
+supply. Check what's connected before you turn the output on.
 
-## Building
+## The code
 
-Rust 1.88 or newer. The library needs nothing else. The app needs GTK 4.14
-and libadwaita 1.5 or newer.
+| Crate | What | License |
+|---|---|---|
+| [`dp100`](crates/dp100) | Protocol library and `dp100` command-line tool | MIT OR Apache-2.0 |
+| [`dp100-studio`](crates/dp100-studio) | The desktop app | GPL-3.0-or-later |
 
-```sh
-cargo test --workspace
-```
+The protocol, and the firmware quirks the library works around, are
+documented in [docs/PROTOCOL.md](docs/PROTOCOL.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for running the checks, the hardware tests
+and the simulator.
 
 ## Credits
 

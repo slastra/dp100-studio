@@ -250,11 +250,11 @@ impl Readouts {
         let footer = super::panel::footer();
         footer.set_max_children_per_line(3);
         let (power, b) = stat("POWER");
-        footer.append(&b);
+        super::panel::add_to_flow(&footer, &b);
         let (vin, b) = stat("INPUT");
-        footer.append(&b);
+        super::panel::add_to_flow(&footer, &b);
         let (temp, b) = stat("TEMPERATURE");
-        footer.append(&b);
+        super::panel::add_to_flow(&footer, &b);
         panel.body.append(&footer);
         root.append(&panel.root);
 

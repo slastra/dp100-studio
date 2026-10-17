@@ -66,7 +66,7 @@ impl Panel {
                     .tooltip_text(*tip)
                     .valign(gtk::Align::Center)
                     .build();
-                row.append(&l);
+                add_to_flow(&row, &l);
                 l
             })
             .collect();
@@ -151,4 +151,13 @@ pub fn footer() -> gtk::FlowBox {
         .row_spacing(12)
         .css_classes(["instrument-footer"])
         .build()
+}
+
+/// Appends to a flow box of lamps or figures. Those are read, not operated,
+/// so the child the flow box wraps them in mustn't take keyboard focus.
+pub fn add_to_flow(flow: &gtk::FlowBox, child: &impl IsA<gtk::Widget>) {
+    flow.append(child);
+    if let Some(wrapper) = child.parent() {
+        wrapper.set_focusable(false);
+    }
 }
