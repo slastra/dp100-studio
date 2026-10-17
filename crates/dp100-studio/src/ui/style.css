@@ -259,10 +259,8 @@ button.sequence-chip:hover {
 }
 
 .preset-trips {
-  font-size: 0.8em;
+  font-size: 0.9em;
   margin-top: 4px;
-  /* Room for descenders at this size. */
-  padding-bottom: 2px;
 }
 
 button.small-pill {

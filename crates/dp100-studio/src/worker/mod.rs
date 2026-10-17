@@ -61,6 +61,9 @@ pub enum Action {
         ocp_ma: u16,
     },
     ActivatePreset(u8),
+    /// Activate a preset, then turn the output on at its setpoints. One
+    /// action, so a failed switch never turns the output on at the old ones.
+    ActivatePresetAndTurnOn(u8),
     SavePreset(u8, Setpoints),
     SetSystem(SystemSettings),
     ClearFault,
@@ -749,6 +752,16 @@ fn perform(dev: &mut Dev, action: &Action, out: &Out) -> Result<Option<String>, 
                 Some(format!("Preset {n} active"))
             })
         }
+        Action::ActivatePresetAndTurnOn(n) => {
+            dev.activate_preset(n)?;
+            refresh_presets(dev, out);
+            let o = dev.set_output(true)?;
+            Ok(Some(format!(
+                "M{n} active, output on at {} with a {} limit",
+                crate::ui::volts(o.vset_mv),
+                crate::ui::amps(o.iset_ma)
+            )))
+        }
         Action::SavePreset(n, ref p) => {
             dev.save_preset(n, p)?;
             refresh_presets(dev, out);
@@ -845,6 +858,20 @@ mod tests {
         };
         assert!(r.is_err());
         next(&w, |e| matches!(e, Event::Sample(_)));
+    }
+
+    #[test]
+    fn switch_and_turn_on_ends_on_at_the_new_preset() {
+        let (w, h) = connected();
+        w.send(Command::Do(Action::ActivatePresetAndTurnOn(1)));
+        let Event::Done(r) = next(&w, |e| matches!(e, Event::Done(_))) else {
+            unreachable!()
+        };
+        assert!(r.is_ok(), "{r:?}");
+        let st = h.snapshot();
+        assert_eq!(st.active, 1);
+        assert!(st.output_on);
+        assert_eq!((st.live.vset_mv, st.live.iset_ma), (2_000, 1_000));
     }
 
     #[test]

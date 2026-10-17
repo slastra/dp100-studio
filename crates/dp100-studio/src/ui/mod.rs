@@ -19,6 +19,7 @@ use gtk::{gdk, gio, glib};
 use crate::worker::{Action, Command, Event, Problem, Source, Worker};
 use controls::Controls;
 use ctx::Ctx;
+pub use ctx::{amps, volts};
 use device::Device;
 use log::Log;
 use presets::Presets;

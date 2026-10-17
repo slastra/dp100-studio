@@ -60,19 +60,22 @@ impl Card {
         root.append(&trips);
 
         let buttons = gtk::Box::builder().spacing(6).margin_top(8).build();
-        let activate = gtk::Button::builder()
-            .label("Use")
+        // Editing is what this page is mostly for: the presets are the
+        // memories recalled from the DP100's own panel. Switching to one
+        // from here is the secondary action.
+        let edit = gtk::Button::builder()
+            .label("Edit")
             .hexpand(true)
             .css_classes(["pill", "small-pill"])
-            .tooltip_text(format!("Make preset {n} the active preset"))
+            .tooltip_text(format!("Change what M{n} holds"))
             .build();
-        let edit = gtk::Button::builder()
-            .icon_name("document-edit-symbolic")
-            .css_classes(["flat", "circular"])
-            .tooltip_text(format!("Edit preset {n}"))
+        let activate = gtk::Button::builder()
+            .label("Use")
+            .css_classes(["flat", "small-pill"])
+            .tooltip_text(format!("Switch the DP100 to M{n} now"))
             .build();
-        buttons.append(&activate);
         buttons.append(&edit);
+        buttons.append(&activate);
         root.append(&buttons);
         Self {
             root,
@@ -99,8 +102,8 @@ impl Presets {
         let group = adw::PreferencesGroup::builder()
             .title("Presets")
             .description(
-                "Stored on the DP100. Switching loads a preset's setpoints and \
-                 limits, and the DP100 turns the output off as it switches.",
+                "The DP100's memories, recalled from its front panel. Edit them \
+                 here; Use switches the supply to one now, which turns the output off.",
             )
             .build();
         root.add(&group);
@@ -146,18 +149,44 @@ impl Presets {
     }
 
     fn use_preset(&self, n: u8) {
-        let ctx = self.ctx.clone();
-        if self.ctx.output_on() {
-            self.ctx.confirm(
-                &format!("Switch to preset {n}?"),
-                "The output is on. The DP100 turns it off when switching presets; turn it back on when you're ready.",
-                "Switch",
-                adw::ResponseAppearance::Suggested,
-                move || ctx.act(Action::ActivatePreset(n)),
-            );
-        } else {
-            ctx.act(Action::ActivatePreset(n));
+        if !self.ctx.output_on() {
+            self.ctx.act(Action::ActivatePreset(n));
+            return;
         }
+        // The DP100 switches the output off as it changes presets. Offer to
+        // turn it straight back on, saying what that will supply.
+        let target = self
+            .ctx
+            .live
+            .borrow()
+            .presets
+            .get(usize::from(n) - 1)
+            .copied();
+        let body = match target {
+            Some(p) => format!(
+                "The DP100 turns the output off as it switches. Turning it back on \
+                 supplies M{n}'s {} with a {} limit.",
+                volts(p.vset_mv),
+                amps(p.iset_ma)
+            ),
+            None => "The DP100 turns the output off as it switches.".to_owned(),
+        };
+        let d = adw::AlertDialog::new(Some(&format!("Switch to M{n}?")), Some(&body));
+        d.add_responses(&[
+            ("cancel", "Cancel"),
+            ("switch", "Switch"),
+            ("on", "Switch and Turn On"),
+        ]);
+        d.set_response_appearance("on", adw::ResponseAppearance::Suggested);
+        d.set_default_response(Some("switch"));
+        d.set_close_response("cancel");
+        let ctx = self.ctx.clone();
+        d.connect_response(None, move |_, r| match r {
+            "switch" => ctx.act(Action::ActivatePreset(n)),
+            "on" => ctx.act(Action::ActivatePresetAndTurnOn(n)),
+            _ => {}
+        });
+        d.present(Some(&self.ctx.window));
     }
 
     fn edit(&self, n: u8) {
@@ -187,7 +216,7 @@ impl Presets {
             group.add(r);
         }
 
-        let d = adw::AlertDialog::new(Some(&format!("Edit Preset {n}")), None);
+        let d = adw::AlertDialog::new(Some(&format!("Edit M{n}")), None);
         d.set_extra_child(Some(&group));
         d.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
         d.set_response_appearance("save", adw::ResponseAppearance::Suggested);
@@ -231,6 +260,7 @@ impl Presets {
             c.active.set_visible(is);
             c.activate.set_sensitive(!is);
             c.activate.set_label(if is { "In use" } else { "Use" });
+            c.activate.set_visible(!is);
             if is {
                 c.root.add_css_class("active");
             } else {
