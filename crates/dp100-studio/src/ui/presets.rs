@@ -7,6 +7,7 @@ use adw::prelude::*;
 use dp100::Setpoints;
 
 use super::ctx::{Ctx, amps, milli, volts};
+use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
 /// One preset, drawn as a memory card: its slot number, the setpoint in
@@ -91,6 +92,9 @@ impl Card {
 
 pub struct Presets {
     pub root: adw::PreferencesPage,
+    panel: Panel,
+    title: gtk::Label,
+    figures: [gtk::Label; 4],
     rows: Vec<Card>,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
@@ -99,13 +103,55 @@ pub struct Presets {
 impl Presets {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
         let root = adw::PreferencesPage::new();
-        let group = adw::PreferencesGroup::builder()
-            .title("Presets")
-            .description(
-                "The DP100's memories, recalled from its front panel. Edit them \
-                 here; Use switches the supply to one now, which turns the output off.",
-            )
+
+        // --- the panel: a memory lamp per preset, the active one lit ---
+        let lamps: Vec<(String, String)> = (1..=9)
+            .map(|n| (format!("M{n}"), format!("Preset {n}")))
+            .collect();
+        let lamp_spec: Vec<(&str, &str, Tone)> = lamps
+            .iter()
+            .map(|(l, t)| (l.as_str(), t.as_str(), Tone::Info))
+            .collect();
+        let panel = Panel::new(&lamp_spec, None);
+        let title = gtk::Label::builder()
+            .css_classes(["seq-title"])
+            .xalign(0.0)
             .build();
+        let meta = gtk::Label::builder()
+            .label(
+                "The DP100's memories, recalled from its own panel. Edit them below; \
+                 Use switches to one now, which turns the output off.",
+            )
+            .css_classes(["channel-note"])
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        let head = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        head.append(&title);
+        head.append(&meta);
+        panel.body.append(&head);
+        let foot = footer();
+        foot.add_css_class("compact");
+        let fig = |caption: &str, class: &str| {
+            let (v, b) = figure(caption, class);
+            foot.append(&b);
+            v
+        };
+        let figures = [
+            fig("VOLTAGE", "volt"),
+            fig("CURRENT LIMIT", "amp"),
+            fig("OVP", "plain"),
+            fig("OCP", "plain"),
+        ];
+        panel.body.append(&foot);
+        let pg = adw::PreferencesGroup::new();
+        pg.add(&panel.root);
+        root.add(&pg);
+
+        let group = adw::PreferencesGroup::builder().title("Memories").build();
         root.add(&group);
 
         let grid = gtk::FlowBox::builder()
@@ -126,6 +172,9 @@ impl Presets {
 
         let p = Rc::new(Self {
             root,
+            panel,
+            title,
+            figures,
             rows,
             active: Cell::new(0),
             ctx,
@@ -251,10 +300,26 @@ impl Presets {
         }
     }
 
+    /// The live output, for the panel's figures.
+    pub fn show_output(&self, o: &Setpoints) {
+        self.figures[0].set_label(&volts(o.vset_mv));
+        self.figures[1].set_label(&amps(o.iset_ma));
+        self.figures[2].set_label(&volts(o.ovp_mv));
+        self.figures[3].set_label(&amps(o.ocp_ma));
+    }
+
     pub fn show_active(&self, index: u8) {
         if self.active.replace(index) == index && index != 0 {
             return;
         }
+        for k in 0..9 {
+            self.panel.lamp(k, usize::from(index) == k + 1);
+        }
+        self.title.set_label(&if index == 0 {
+            "Boot default in use".to_owned()
+        } else {
+            format!("M{index} in use")
+        });
         for (k, c) in self.rows.iter().enumerate() {
             let is = k as u8 + 1 == index;
             c.active.set_visible(is);

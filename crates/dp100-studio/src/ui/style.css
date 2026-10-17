@@ -300,6 +300,7 @@ button.small-pill {
 .tile.watt { border-left-color: @dp_watt; }
 .tile.amp { border-left-color: @dp_amp; }
 .tile.volt { border-left-color: @dp_volt; }
+.tile.heat { border-left-color: @dp_heat; }
 
 .tile-value {
   font-size: 1.7em;

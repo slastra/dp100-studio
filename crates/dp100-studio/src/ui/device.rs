@@ -5,10 +5,11 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use dp100::{DeviceInfo, Setpoints, SystemSettings};
+use dp100::{BasicInfo, DeviceInfo, Setpoints, SystemSettings};
 use gtk::glib;
 
-use super::ctx::{Ctx, milli};
+use super::ctx::{Ctx, milli, volts};
+use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
 /// Rows that follow the device until edited. Apply and Revert appear only
@@ -91,16 +92,6 @@ fn spin(title: &str, subtitle: &str, min: f64, max: f64, step: f64, digits: u32)
     r
 }
 
-fn info_row(group: &adw::PreferencesGroup, title: &str) -> adw::ActionRow {
-    let r = adw::ActionRow::builder()
-        .title(title)
-        .subtitle_selectable(true)
-        .css_classes(["property"])
-        .build();
-    group.add(&r);
-    r
-}
-
 pub struct Device {
     pub root: adw::PreferencesPage,
     protection: Rc<Form>,
@@ -113,16 +104,84 @@ pub struct Device {
     volume: adw::SpinRow,
     rpp: adw::SwitchRow,
     auto_on: adw::SwitchRow,
-    model: adw::ActionRow,
-    firmware: adw::ActionRow,
-    serial: adw::ActionRow,
-    made: adw::ActionRow,
+    panel: Panel,
+    release: gtk::Button,
+    title: gtk::Label,
+    meta: gtk::Label,
+    vin: gtk::Label,
+    vo_max: gtk::Label,
+    temp: gtk::Label,
+    rail: gtk::Label,
+    simulated: bool,
     ctx: Rc<Ctx>,
 }
+
+/// Panel lamps: the panel lock while this app holds the DP100, and the two
+/// settings that change how the supply behaves on its own.
+const LAMPS: [(&str, &str, Tone); 3] = [
+    (
+        "PANEL LOCK",
+        "The DP100's buttons are locked while DP100 Studio is connected",
+        Tone::Info,
+    ),
+    ("RPP", "Reverse-polarity protection is on", Tone::Ok),
+    (
+        "AUTO-ON",
+        "The output comes on by itself at power-up",
+        Tone::Warn,
+    ),
+];
 
 impl Device {
     pub fn new(ctx: Rc<Ctx>, simulated: bool) -> Rc<Self> {
         let root = adw::PreferencesPage::new();
+
+        // --- the unit, as a panel ---
+        let release = gtk::Button::builder()
+            .child(
+                &adw::ButtonContent::builder()
+                    .icon_name("changes-allow-symbolic")
+                    .label("Release Panel")
+                    .build(),
+            )
+            .css_classes(["pill", "power-button"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Unlock the DP100's Buttons Until You Reconnect")
+            .action_name("win.release")
+            .build();
+        let panel = Panel::new(&LAMPS, Some(release.upcast_ref()));
+        let title = gtk::Label::builder()
+            .label("DP100")
+            .css_classes(["seq-title"])
+            .xalign(0.0)
+            .build();
+        let meta = gtk::Label::builder()
+            .css_classes(["channel-note"])
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .build();
+        let head = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        head.append(&title);
+        head.append(&meta);
+        panel.body.append(&head);
+        let foot = footer();
+        let (vin, b) = figure("INPUT", "plain");
+        foot.append(&b);
+        let (vo_max, b) = figure("AVAILABLE", "volt");
+        foot.append(&b);
+        let (temp, b) = figure("TEMPERATURE", "heat");
+        foot.append(&b);
+        let (rail, b) = figure("5 V RAIL", "plain");
+        foot.append(&b);
+        foot.add_css_class("compact");
+        panel.body.append(&foot);
+        let hg = adw::PreferencesGroup::new();
+        hg.add(&panel.root);
+        root.add(&hg);
 
         let protection = Form::new("Save the trips to the active preset. They apply at once.");
         let pg = adw::PreferencesGroup::builder()
@@ -162,18 +221,6 @@ impl Device {
         sg.add(&auto_on);
         root.add(&sg);
 
-        let ig = adw::PreferencesGroup::builder()
-            .title("About This Unit")
-            .build();
-        let model = info_row(&ig, "Model");
-        if simulated {
-            model.set_subtitle("ATK-DP100 (simulated)");
-        }
-        let firmware = info_row(&ig, "Firmware");
-        let serial = info_row(&ig, "Serial");
-        let made = info_row(&ig, "Manufactured");
-        root.add(&ig);
-
         for r in [&ovp, &ocp] {
             protection.watch(r, "value");
         }
@@ -196,10 +243,15 @@ impl Device {
             volume,
             rpp,
             auto_on,
-            model,
-            firmware,
-            serial,
-            made,
+            panel,
+            release,
+            title,
+            meta,
+            vin,
+            vo_max,
+            temp,
+            rail,
+            simulated,
             ctx,
         });
 
@@ -282,16 +334,36 @@ impl Device {
     }
 
     pub fn show_info(&self, i: &DeviceInfo) {
-        if self.model.subtitle().is_none_or(|s| s.is_empty()) {
-            self.model.set_subtitle(&i.model);
-        }
-        self.firmware.set_subtitle(&format!(
-            "{} (hardware {}, bootloader {})",
-            i.firmware, i.hardware, i.bootloader
-        ));
-        self.serial.set_subtitle(&i.serial_hex());
+        self.title.set_label(&if self.simulated {
+            format!("{} (simulated)", i.model)
+        } else {
+            i.model.clone()
+        });
         let (y, m, d) = i.manufactured;
-        self.made.set_subtitle(&format!("{y:04}-{m:02}-{d:02}"));
+        self.meta.set_label(&format!(
+            "Firmware {} · hardware {} · bootloader {} · made {y:04}-{m:02}-{d:02} · serial {}",
+            i.firmware,
+            i.hardware,
+            i.bootloader,
+            i.serial_hex()
+        ));
+        // Connected means the panel is locked; Release Panel undoes that.
+        self.panel.lamp(0, true);
+    }
+
+    pub fn show_sample(&self, m: &BasicInfo) {
+        self.vin.set_label(&volts(m.vin_mv));
+        self.vo_max.set_label(&volts(m.vo_max_mv));
+        self.temp.set_label(&format!(
+            "{:.1}\u{202f}°C",
+            f64::from(m.temp1_dc.max(m.temp2_dc)) / 10.0
+        ));
+        self.rail.set_label(&volts(m.dc5v_mv));
+    }
+
+    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+        self.panel
+            .narrow_layout(bp, Some(self.release.upcast_ref()));
     }
 
     pub fn show_output(&self, o: &Setpoints) {
@@ -312,5 +384,7 @@ impl Device {
             self.rpp.set_active(s.reverse_protect.unwrap_or(false));
             self.auto_on.set_active(s.auto_on.unwrap_or(false));
         });
+        self.panel.lamp(1, s.reverse_protect == Some(true));
+        self.panel.lamp(2, s.auto_on == Some(true));
     }
 }

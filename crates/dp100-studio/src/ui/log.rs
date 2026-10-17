@@ -9,6 +9,7 @@ use adw::prelude::*;
 use gtk::gio;
 
 use super::ctx::Ctx;
+use super::panel::{Panel, Tone, figure, footer};
 use crate::logging::csv::sessions_dir;
 use crate::worker::{Command, RecordingStatus};
 
@@ -49,10 +50,12 @@ fn thousands(n: u64) -> String {
 
 pub struct Log {
     pub root: adw::PreferencesPage,
+    panel: Panel,
     record: gtk::Button,
     record_content: adw::ButtonContent,
+    title: gtk::Label,
+    meta: gtk::Label,
     rate: adw::ComboRow,
-    status: adw::ActionRow,
     file: adw::ActionRow,
     energy: gtk::Label,
     charge: gtk::Label,
@@ -66,6 +69,7 @@ impl Log {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
         let root = adw::PreferencesPage::new();
 
+        // --- the panel: recording state, Record, and what was delivered ---
         let record_content = adw::ButtonContent::builder()
             .icon_name("media-record-symbolic")
             .label("Record")
@@ -74,102 +78,103 @@ impl Log {
             .child(&record_content)
             .css_classes(["pill", "record-button"])
             .valign(gtk::Align::Center)
+            .tooltip_text("Record every measurement to a new CSV file")
             .build();
-        // What has been delivered, as big figures, first: it is what the
-        // page is most often opened for.
+        let panel = Panel::new(
+            &[("REC", "Recording to a file", Tone::Alert)],
+            Some(record.upcast_ref()),
+        );
+        let title = gtk::Label::builder()
+            .label("Not recording")
+            .css_classes(["seq-title"])
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        let meta = gtk::Label::builder()
+            .css_classes(["channel-note"])
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        let head = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        head.append(&title);
+        head.append(&meta);
+        panel.body.append(&head);
+
+        let foot = footer();
+        let (energy, b) = figure("ENERGY", "watt");
+        foot.append(&b);
+        let (charge, b) = figure("CHARGE", "amp");
+        foot.append(&b);
+        let (covered, b) = figure("MEASURED FOR", "plain");
+        foot.append(&b);
+        panel.body.append(&foot);
+
         let reset = gtk::Button::builder()
             .label("Reset")
-            .css_classes(["flat"])
-            .valign(gtk::Align::Center)
-            .tooltip_text("Start counting again from zero")
+            .css_classes(["flat", "small-pill"])
+            .tooltip_text("Start Counting Again From Zero")
             .build();
-        let eg = adw::PreferencesGroup::builder()
-            .title("Delivered")
-            .description(
-                "Integrated from the measurements since connecting, or since the last reset.",
-            )
-            .header_suffix(&reset)
-            .build();
-        let tiles = gtk::Box::builder()
-            .spacing(12)
-            .homogeneous(true)
-            .css_classes(["card", "tiles"])
-            .build();
-        let tile = |caption: &str, class: &str| {
-            let b = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(2)
-                .css_classes(["tile", class])
-                .build();
-            b.append(
-                &gtk::Label::builder()
-                    .label(caption)
-                    .css_classes(["stat-caption"])
-                    .xalign(0.0)
-                    .build(),
-            );
-            let v = gtk::Label::builder()
-                .label("--")
-                .css_classes(["tile-value", "numeric"])
+        let since = gtk::Box::builder().spacing(8).build();
+        since.append(
+            &gtk::Label::builder()
+                .label("Delivered since connecting, integrated from the measurements")
+                .css_classes(["channel-note"])
                 .xalign(0.0)
-                .build();
-            b.append(&v);
-            tiles.append(&b);
-            v
-        };
-        let energy = tile("ENERGY", "watt");
-        let charge = tile("CHARGE", "amp");
-        let covered = tile("MEASURED FOR", "time");
-        eg.add(&tiles);
-        root.add(&eg);
+                .hexpand(true)
+                .wrap(true)
+                .build(),
+        );
+        since.append(&reset);
+        panel.body.append(&since);
 
+        let pg = adw::PreferencesGroup::new();
+        pg.add(&panel.root);
+        root.add(&pg);
+
+        // --- recording settings ---
         let rg = adw::PreferencesGroup::builder()
             .title("Recording")
-            .description(format!(
-                "Every measurement goes to a new CSV file, with the setpoints, \
-                 mode, temperatures, and energy since the recording started. \
-                 Files are kept in {}.",
-                sessions_dir().display()
-            ))
-            .header_suffix(&record)
+            .description(
+                "Each recording is a new CSV file with the setpoints, mode, \
+                 temperatures, and the energy since it started",
+            )
             .build();
-        let labels: Vec<String> = RATES.iter().map(|r| format!("{r} Hz")).collect();
+        let labels: Vec<String> = RATES.iter().map(|r| format!("{r}\u{202f}Hz")).collect();
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
         let rate = adw::ComboRow::builder()
-            .title("Sample rate")
+            .title("Sample Rate")
             .subtitle("Measurements per second while recording")
             .model(&gtk::StringList::new(&labels))
             .selected(1)
-            .build();
-        let status = adw::ActionRow::builder()
-            .title("Status")
-            .subtitle("Not recording")
-            .css_classes(["property"])
             .build();
         let open = gtk::Button::builder()
             .icon_name("folder-open-symbolic")
             .css_classes(["flat"])
             .valign(gtk::Align::Center)
-            .tooltip_text("Show in the file manager")
+            .tooltip_text("Show in Files")
             .build();
         let file = adw::ActionRow::builder()
-            .title("File")
-            .subtitle("None yet")
+            .title("Saved To")
+            .subtitle(sessions_dir().display().to_string())
             .subtitle_selectable(true)
             .css_classes(["property"])
             .build();
         file.add_suffix(&open);
         rg.add(&rate);
-        rg.add(&status);
         rg.add(&file);
         root.add(&rg);
 
         let l = Rc::new(Self {
             root,
+            panel,
             record,
             record_content,
+            title,
+            meta,
             rate,
-            status,
             file,
             energy,
             charge,
@@ -178,16 +183,24 @@ impl Log {
             last_file: RefCell::new(None),
             ctx,
         });
+        l.show_idle();
 
+        let w = Rc::downgrade(&l);
+        l.rate.connect_selected_notify(move |_| {
+            if let Some(l) = w.upgrade()
+                && !l.recording.get()
+            {
+                l.show_idle();
+            }
+        });
         let w = Rc::downgrade(&l);
         l.record.connect_clicked(move |_| {
             if let Some(l) = w.upgrade() {
                 if l.recording.get() {
                     l.ctx.command(Command::StopRecording);
                 } else {
-                    let rate_hz = RATES[l.rate.selected() as usize % RATES.len()];
                     l.ctx.command(Command::StartRecording {
-                        rate_hz,
+                        rate_hz: l.rate_hz(),
                         dir: sessions_dir(),
                     });
                 }
@@ -202,6 +215,22 @@ impl Log {
             }
         });
         l
+    }
+
+    fn rate_hz(&self) -> u32 {
+        RATES[self.rate.selected() as usize % RATES.len()]
+    }
+
+    fn show_idle(&self) {
+        self.title.set_label("Not recording");
+        self.meta.set_label(&format!(
+            "Record saves every measurement, {} times a second, to a new file",
+            self.rate_hz()
+        ));
+    }
+
+    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+        self.panel.narrow_layout(bp, Some(self.record.upcast_ref()));
     }
 
     fn show_in_files(&self) {
@@ -226,6 +255,7 @@ impl Log {
             return;
         }
         self.rate.set_sensitive(!on);
+        self.panel.lamp(0, on);
         if on {
             self.record_content.set_label("Stop");
             self.record_content
@@ -235,7 +265,7 @@ impl Log {
             self.record_content.set_label("Record");
             self.record_content.set_icon_name("media-record-symbolic");
             self.record.remove_css_class("recording");
-            self.status.set_subtitle("Not recording");
+            self.show_idle();
         }
     }
 
@@ -254,9 +284,15 @@ impl Log {
 
     pub fn show_recording(&self, r: &RecordingStatus) {
         self.set_recording(true);
-        self.status.set_subtitle(&format!(
-            "Recording · {} · {} rows · {} · {}",
-            clock(r.elapsed),
+        let name = r
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.title
+            .set_label(&format!("Recording · {}", clock(r.elapsed)));
+        self.meta.set_label(&format!(
+            "{name} · {} rows · {} and {} so far",
             thousands(r.rows),
             energy(r.mwh),
             charge(r.mah)

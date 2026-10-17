@@ -202,6 +202,8 @@ fn install_breakpoint(w: &Rc<Window>) {
     });
     w.readouts.narrow_layout(&bp);
     w.sequences.narrow_layout(&bp);
+    w.log.narrow_layout(&bp);
+    w.device.narrow_layout(&bp);
     w.ctx.window.add_breakpoint(bp);
 
     let views = w.views.clone();
@@ -439,6 +441,7 @@ impl Window {
                 self.ctx.live.borrow_mut().system = Some(s.system);
                 self.readouts.show_output(&s.output);
                 self.presets.show_active(s.output.index);
+                self.presets.show_output(&s.output);
                 self.device.show_info(&s.info);
                 self.device.show_output(&s.output);
                 self.device.show_system(&s.system);
@@ -448,6 +451,7 @@ impl Window {
                 let m = s.m;
                 self.ctx.live.borrow_mut().sample = Some(m);
                 self.readouts.show_sample(s.at, &m);
+                self.device.show_sample(&m);
                 if m.fault != Fault::Ok {
                     self.set_banner(
                         Some(&format!(
@@ -478,6 +482,7 @@ impl Window {
                 }
                 self.readouts.show_output(&o);
                 self.presets.show_active(o.index);
+                self.presets.show_output(&o);
                 self.device.show_output(&o);
             }
             Event::Presets(p) => {
