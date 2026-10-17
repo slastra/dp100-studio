@@ -17,6 +17,15 @@ All notable changes to this project are documented here. The format follows
   protection trips, panel and safety settings, and unit details. Protection
   trips can be cleared from the banner. "Release Front Panel" stops talking
   to the DP100 so its buttons work, until Reconnect.
+- Sequences: a step table (set, output on/off, wait, ramp, wait until a
+  measurement meets a condition, repeat blocks) saved as TOML in
+  `$XDG_DATA_HOME/dp100-studio/sequences`, with two examples on first run.
+  Each edit is checked against the DP100's present limits and the
+  sequence's own, with an estimate of how long it takes. Running one that
+  turns the output on asks first. The worker runs it without blocking, so
+  Stop, F9, a trip, lost input, an unplug or an outside change stops it
+  within one poll, applying its "if it stops early" setting. Quitting
+  mid-sequence asks first.
 - Logging: a Log page records every measurement to CSV at 10, 20, 50 or
   100 Hz, with the setpoints, mode, fault, temperatures and energy since
   the recording started, under `$XDG_DATA_HOME/dp100-studio/sessions`.

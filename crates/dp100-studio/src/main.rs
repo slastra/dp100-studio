@@ -1,4 +1,5 @@
 mod logging;
+mod seq;
 mod ui;
 mod worker;
 

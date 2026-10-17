@@ -22,6 +22,9 @@ async-channel = "2"
 crossbeam-channel = "0.5"
 # SIGINT/SIGTERM as main-loop sources, so they quit cleanly.
 glib-unix = "0.22"
+# Sequences are stored as TOML.
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 
 [lints]
 workspace = true

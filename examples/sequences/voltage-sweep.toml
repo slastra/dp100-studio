@@ -1,0 +1,48 @@
+# Steps the output from 1 V to 5 V and back, three times, with a 100 mA
+# current limit. Handy for watching how a circuit behaves across its supply
+# range.
+
+[sequence]
+name = "Voltage sweep"
+format = 1
+on_abort = "output_off"
+
+[limits]
+max_voltage = 5.0
+max_current = 0.1
+
+[[step]]
+type = "set"
+voltage = 1.0
+current = 0.1
+
+[[step]]
+type = "output"
+on = true
+
+[[step]]
+type = "repeat"
+count = 3
+
+[[step]]
+type = "ramp"
+target = "voltage"
+to = 5.0
+duration = "10s"
+
+[[step]]
+type = "wait"
+duration = "2s"
+
+[[step]]
+type = "ramp"
+target = "voltage"
+to = 1.0
+duration = "10s"
+
+[[step]]
+type = "end"
+
+[[step]]
+type = "output"
+on = false

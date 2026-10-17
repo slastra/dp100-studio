@@ -4,8 +4,9 @@ A native Linux app for the ALIENTEK DP100 USB-C bench power supply, built with
 GTK 4 and libadwaita.
 
 > [!WARNING]
-> Early development. The protocol library, CLI and desktop app work, with
-> logging; scripted sequences are next.
+> Early development. The protocol library, CLI and desktop app work: live
+> readouts and graph, controls, presets, logging and sequences. Packaging is
+> next.
 
 ## What's here
 
@@ -44,6 +45,21 @@ the app waits while the CLI has it and connects as soon as it is free.
 While the app is connected the DP100's own buttons are locked (the firmware
 does this whenever a computer is polling it). Use **Release Front Panel** in
 the menu to hand the panel back, and **Reconnect** to take it again.
+
+## Sequences
+
+A sequence is a list of steps: set the voltage and current, turn the output
+on or off, wait, ramp a setpoint, wait until a measurement meets a condition
+(say, current below 50 mA for 30 s), and repeat blocks. They're edited on the
+Sequences page and stored as TOML; see
+[examples/sequences](examples/sequences) for the format.
+
+Before a run, every step is checked against the DP100's protection trips,
+its range, and the sequence's own limits. A step above any of them is an
+error, not something quietly clamped. A run stops at once on Stop, F9, a
+protection trip, lost input power, an unplug, or the output being changed
+from elsewhere, and then turns the output off unless the sequence says to
+leave it.
 
 ## CLI
 

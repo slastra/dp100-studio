@@ -6,6 +6,7 @@ mod history;
 mod log;
 mod presets;
 mod readouts;
+mod sequences;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,6 +23,7 @@ use device::Device;
 use log::Log;
 use presets::Presets;
 use readouts::Readouts;
+use sequences::Sequences;
 
 const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap ◀ on the panel.";
 
@@ -64,6 +66,7 @@ struct Window {
     presets: Rc<Presets>,
     device: Rc<Device>,
     log: Rc<Log>,
+    sequences: Rc<Sequences>,
     simulated: bool,
 }
 
@@ -87,7 +90,25 @@ pub fn activate(app: &adw::Application, simulate: bool) {
     let events = worker.events.clone();
     // The worker lives as long as the window; dropping it stops the thread.
     let worker = RefCell::new(Some(worker));
-    w.ctx.window.connect_close_request(move |_| {
+    let confirmed = std::cell::Cell::new(false);
+    let ui = w.clone();
+    w.ctx.window.connect_close_request(move |win| {
+        // Closing mid-sequence stops it, applying its on_abort, so ask.
+        if ui.sequences.is_running() && !confirmed.get() {
+            let win = win.clone();
+            let ui2 = ui.clone();
+            ui.ctx.confirm(
+                "Stop the sequence and quit?",
+                "A sequence is running. Quitting stops it, and applies its \"if it stops early\" setting.",
+                "Stop and Quit",
+                adw::ResponseAppearance::Destructive,
+                move || {
+                    let _ = &ui2;
+                    win.destroy();
+                },
+            );
+            return glib::Propagation::Stop;
+        }
         worker.borrow_mut().take();
         glib::Propagation::Proceed
     });
@@ -244,6 +265,7 @@ fn build(
     let presets = Presets::new(ctx.clone());
     let device = Device::new(ctx.clone(), simulated);
     let log = Log::new(ctx.clone());
+    let sequences = Sequences::new(ctx.clone());
 
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
@@ -257,6 +279,12 @@ fn build(
         Some("presets"),
         "Presets",
         "view-list-symbolic",
+    );
+    views.add_titled_with_icon(
+        &sequences.root,
+        Some("sequences"),
+        "Sequences",
+        "media-playlist-repeat-symbolic",
     );
     views.add_titled_with_icon(&log.root, Some("log"), "Log", "media-record-symbolic");
     views.add_titled_with_icon(
@@ -302,6 +330,7 @@ fn build(
         presets,
         device,
         log,
+        sequences,
         simulated,
     }
 }
@@ -384,7 +413,16 @@ impl Window {
                 }
             }
             Event::Output(o) => {
+                let changed = self
+                    .ctx
+                    .live
+                    .borrow()
+                    .output
+                    .is_none_or(|old| (old.ovp_mv, old.ocp_ma) != (o.ovp_mv, o.ocp_ma));
                 self.ctx.live.borrow_mut().output = Some(o);
+                if changed {
+                    self.sequences.refresh_checks();
+                }
                 self.readouts.show_output(&o);
                 self.presets.show_active(o.index);
                 self.device.show_output(&o);
@@ -414,6 +452,8 @@ impl Window {
                 self.recording_chip.set_visible(false);
                 self.log.show_stopped(&r);
             }
+            Event::Sequence { name, status } => self.sequences.show_progress(&name, &status),
+            Event::SequenceEnded { name, outcome } => self.sequences.show_ended(&name, &outcome),
             Event::Done(Ok(Some(note))) => self.ctx.toast(&note),
             Event::Done(Ok(None)) => {}
             Event::Done(Err(e)) => self.ctx.error(&e),
