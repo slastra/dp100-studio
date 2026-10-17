@@ -210,7 +210,7 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 }
 
 pub struct Readouts {
-    pub root: gtk::Box,
+    pub root: adw::PreferencesPage,
     panel: Panel,
     channels: gtk::Box,
     graph_bar: gtk::Box,
@@ -232,10 +232,14 @@ pub struct Readouts {
 
 impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(24)
-            .build();
+        // A preferences page like the others, so every page has the same
+        // width and margins.
+        let root = adw::PreferencesPage::new();
+        let group = |w: &gtk::Widget| {
+            let g = adw::PreferencesGroup::new();
+            g.add(w);
+            root.add(&g);
+        };
 
         // --- the instrument panel ---
         let panel = Panel::new(&LAMPS, Some(controls.toggle.upcast_ref()));
@@ -256,9 +260,9 @@ impl Readouts {
         let (temp, b) = stat("TEMPERATURE");
         super::panel::add_to_flow(&footer, &b);
         panel.body.append(&footer);
-        root.append(&panel.root);
+        group(panel.root.upcast_ref());
 
-        root.append(&controls.setpoint);
+        root.add(&controls.setpoint);
 
         let graph = Graph::default();
         if let Some(secs) = std::env::var("DP100_STUDIO_PREFILL_SECS")
@@ -268,14 +272,14 @@ impl Readouts {
             graph.prefill(secs);
         }
         let (section, graph_bar, lane_toggles) = graph_section(&graph);
-        root.append(&section);
+        group(section.upcast_ref());
 
         let output = adw::PreferencesGroup::builder().title("Details").build();
         let protection = row(&output, "Protection trips");
         let preset = row(&output, "Active preset");
         let delivered = row(&output, "Delivered since connecting");
         let rail = row(&output, "Internal 5 V rail");
-        root.append(&output);
+        root.add(&output);
 
         Self {
             root,

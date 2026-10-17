@@ -425,21 +425,6 @@ fn install_breakpoint(w: &Rc<Window>) {
         .connect_clicked(move |_| views.set_visible_child_name("sequences"));
 }
 
-fn page<W: IsA<gtk::Widget>>(child: &W) -> gtk::ScrolledWindow {
-    let clamp = adw::Clamp::builder()
-        .maximum_size(720)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(12)
-        .margin_end(12)
-        .child(child)
-        .build();
-    gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&clamp)
-        .build()
-}
-
 fn build(
     app: &adw::Application,
     cmds: crossbeam_channel::Sender<Command>,
@@ -546,7 +531,7 @@ fn build(
 
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
-        &page(&readouts.root),
+        &readouts.root,
         Some("monitor"),
         "Monitor",
         "utilities-system-monitor-symbolic",
