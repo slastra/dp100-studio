@@ -1,19 +1,15 @@
-//! The live readout panel: big output figures and the details beneath.
+//! The Monitor page: big output figures, the controls, the graph, and the
+//! details beneath.
 
+use std::rc::Rc;
 use std::time::Instant;
 
 use adw::prelude::*;
-use dp100::{BasicInfo, Fault, Mode, Setpoints, SystemSettings};
+use dp100::{BasicInfo, Fault, Mode, Setpoints};
 
+use super::controls::Controls;
+use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
-
-fn volts(mv: u16) -> String {
-    format!("{:.3} V", f64::from(mv) / 1000.0)
-}
-
-fn amps(ma: u16) -> String {
-    format!("{:.3} A", f64::from(ma) / 1000.0)
-}
 
 fn celsius(dc: i16) -> String {
     format!("{:.1} °C", f64::from(dc) / 10.0)
@@ -139,23 +135,22 @@ fn graph_section(graph: &Graph) -> gtk::Box {
 
 pub struct Readouts {
     pub root: gtk::Box,
+    controls: Rc<Controls>,
     graph: Graph,
     vout: Figure,
     iout: Figure,
     power: Figure,
     mode: gtk::Label,
-    setpoint: gtk::Label,
     protection: gtk::Label,
     preset: gtk::Label,
     vin: gtk::Label,
     vo_max: gtk::Label,
     temps: gtk::Label,
     rail: gtk::Label,
-    limits: gtk::Label,
 }
 
 impl Readouts {
-    pub fn new() -> Self {
+    pub fn new(controls: Rc<Controls>) -> Self {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
@@ -173,8 +168,13 @@ impl Readouts {
         let mode = gtk::Label::builder()
             .css_classes(["mode-badge"])
             .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
             .build();
-        root.append(&mode);
+        let state = gtk::Box::builder().spacing(12).build();
+        state.append(&mode);
+        state.append(&controls.toggle);
+        root.append(&state);
+        root.append(&controls.setpoint);
 
         let graph = Graph::default();
         if let Some(secs) = std::env::var("DP100_STUDIO_PREFILL_SECS")
@@ -186,7 +186,6 @@ impl Readouts {
         root.append(&graph_section(&graph));
 
         let output = adw::PreferencesGroup::builder().title("Output").build();
-        let setpoint = row(&output, "Setpoint");
         let protection = row(&output, "Protection");
         let preset = row(&output, "Preset");
         root.append(&output);
@@ -196,29 +195,28 @@ impl Readouts {
         let vo_max = row(&supply, "Highest output available");
         let temps = row(&supply, "Temperature");
         let rail = row(&supply, "Internal 5 V rail");
-        let limits = row(&supply, "Trip limits");
         root.append(&supply);
 
         Self {
             root,
+            controls,
             graph,
             vout,
             iout,
             power,
             mode,
-            setpoint,
             protection,
             preset,
             vin,
             vo_max,
             temps,
             rail,
-            limits,
         }
     }
 
     pub fn show_sample(&self, at: Instant, m: &BasicInfo) {
         self.graph.push(at, m);
+        self.controls.show_sample(m);
         self.vout.value.set_label(&volts(m.vout_mv));
         self.iout.value.set_label(&amps(m.iout_ma));
         self.power
@@ -249,8 +247,7 @@ impl Readouts {
     }
 
     pub fn show_output(&self, o: &Setpoints) {
-        self.setpoint
-            .set_label(&format!("{} · {}", volts(o.vset_mv), amps(o.iset_ma)));
+        self.controls.show_output(o);
         self.protection
             .set_label(&format!("OVP {} · OCP {}", volts(o.ovp_mv), amps(o.ocp_ma)));
         self.preset.set_label(&if o.index == 0 {
@@ -258,13 +255,5 @@ impl Readouts {
         } else {
             o.index.to_string()
         });
-    }
-
-    pub fn show_system(&self, s: &SystemSettings) {
-        self.limits.set_label(&format!(
-            "OTP {} °C · OPP {:.1} W",
-            s.otp_c,
-            f64::from(s.opp_dw) / 10.0
-        ));
     }
 }

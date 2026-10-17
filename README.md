@@ -4,8 +4,8 @@ A native Linux app for the ALIENTEK DP100 USB-C bench power supply, built with
 GTK 4 and libadwaita.
 
 > [!WARNING]
-> Early development. The protocol library and CLI work. The desktop app shows
-> live readouts but has no controls yet.
+> Early development. The protocol library, CLI and desktop app work; logging
+> and sequences are next.
 
 ## What's here
 
@@ -37,8 +37,13 @@ cargo run -p dp100-studio -- --simulate  # a simulated DP100, no hardware needed
 ```
 
 It connects read-only: opening the app never changes anything on the supply.
-Only one program can talk to the DP100 at a time, so the app waits while the
-CLI has it and connects as soon as it is free.
+Turning the output on always asks first; turning it off never does, and F9
+does it from anywhere. Only one program can talk to the DP100 at a time, so
+the app waits while the CLI has it and connects as soon as it is free.
+
+While the app is connected the DP100's own buttons are locked (the firmware
+does this whenever a computer is polling it). Use **Release Front Panel** in
+the menu to hand the panel back, and **Reconnect** to take it again.
 
 ## CLI
 

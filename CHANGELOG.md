@@ -11,6 +11,12 @@ All notable changes to this project are documented here. The format follows
   setpoints, protection, input, temperatures), connection status, hotplug,
   and warnings for permission problems, a busy device, trips and missing
   input. `--simulate` runs it against a simulated DP100.
+- Controls: setpoint editing, output on/off (on always asks and says what
+  it will supply; off never asks, and F9 turns it off from anywhere), a
+  Presets page to switch and edit presets 1-9, and a Device page for
+  protection trips, panel and safety settings, and unit details. Protection
+  trips can be cleared from the banner. "Release Front Panel" stops talking
+  to the DP100 so its buttons work, until Reconnect.
 - Live graph: stacked voltage, current, power and temperature lanes, windows
   from 10 s to 1 h, pause and hover readout. History is kept at three
   resolutions, so an hour at 100 Hz draws in under a millisecond, and

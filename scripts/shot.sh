@@ -4,6 +4,9 @@
 #
 #   scripts/shot.sh OUT.png [WxH] [app args...]
 #
+# SHOT_NESTED=1 runs sway as a window on your desktop instead (needed for
+# clicks; WxH is then the host window's size).
+#
 # e.g. scripts/shot.sh /tmp/sim.png 600x820 --simulate
 #
 # The app gets a private runtime, config and state directory, so nothing it
@@ -28,9 +31,20 @@ default_border none
 output HEADLESS-1 resolution $SIZE
 CONF
 
-env -u WAYLAND_DISPLAY -u DISPLAY XDG_RUNTIME_DIR="$RT" \
-    WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
-    sway --unsupported-gpu -c "$RT/sway.conf" >"$RT/sway.log" 2>&1 &
+if [ -n "${SHOT_NESTED:-}" ]; then
+    # Nested: sway runs as a window on the host (Hyprland floats it at
+    # 1400x900 on workspace 2 without focus; see hyprland.lua). Clicks need
+    # this: headless sway has no pointer, and each one-shot wlrctl device
+    # vanishes before GTK binds it, so presses are lost.
+    HOST=${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?SHOT_NESTED needs a host Wayland session}
+    env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$HOST" \
+        WLR_BACKENDS=wayland WLR_WL_OUTPUTS=1 \
+        sway --unsupported-gpu -c "$RT/sway.conf" >"$RT/sway.log" 2>&1 &
+else
+    env -u WAYLAND_DISPLAY -u DISPLAY XDG_RUNTIME_DIR="$RT" \
+        WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
+        sway --unsupported-gpu -c "$RT/sway.conf" >"$RT/sway.log" 2>&1 &
+fi
 SWAY=$!
 for _ in $(seq 50); do
     SOCK=$(ls "$RT"/wayland-* 2>/dev/null | grep -v lock | head -1)
@@ -45,10 +59,28 @@ env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" GDK_BACKEND=wayland
     "$BIN" "$@" >"$RT/app.log" 2>&1 &
 APP=$!
 sleep "${SHOT_DELAY:-3}"
+# wlrctl only moves relative to the cursor, which sway starts in the middle
+# of the output. Pin it to the top-left corner first so positions are
+# absolute.
+if [ -n "${SHOT_POINTER:-}${SHOT_CLICKS:-}" ]; then
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move -10000 -10000
+fi
 if [ -n "${SHOT_POINTER:-}" ]; then
-    # wlrctl moves relative to where the pointer is; it starts at 0,0.
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move $SHOT_POINTER
     sleep 0.5
+fi
+# SHOT_CLICKS="X Y;X Y;..." clicks at each absolute position in turn.
+if [ -n "${SHOT_CLICKS:-}" ]; then
+    read -r PX PY <<<"${SHOT_POINTER:-0 0}"
+    IFS=';' read -ra CLICKS <<<"$SHOT_CLICKS"
+    for c in "${CLICKS[@]}"; do
+        read -r X Y <<<"$c"
+        XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move $((X-PX)) $((Y-PY))
+        PX=$X; PY=$Y
+        sleep 0.3
+        XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer click left
+        sleep "${SHOT_CLICK_DELAY:-1}"
+    done
 fi
 XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "$OUT" || { cat "$RT/app.log" >&2; exit 1; }
 grep -v '^$' "$RT/app.log" >&2 || true
