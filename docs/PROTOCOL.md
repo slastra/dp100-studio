@@ -56,8 +56,8 @@ fb 40 00 00 30 d4          SYSTEM_INFO
 | `0x10` | DEVICE_INFO | empty | 40 bytes | **HW** |
 | `0x11`–`0x15` | firmware update | | | **M** (not used by this project) |
 | `0x30` | BASIC_INFO | empty | 16 bytes | **HW** |
-| `0x35` | BASIC_SET | sub-op + optional 9 bytes | 10 bytes or ACK | **HW** for reads |
-| `0x40` | SYSTEM_INFO | empty to read, 8 bytes to write | 8 bytes or ACK | **HW** for reads |
+| `0x35` | BASIC_SET | sub-op + optional 9 bytes | 10 bytes or ACK | **HW** |
+| `0x40` | SYSTEM_INFO | empty to read, 8 bytes to write | 8 bytes or ACK | **HW**; writes persist |
 | `0x45` | SYSTEM_SET | | ignored by the device | **S** |
 | `0x50` | SCAN_OUT | 12 bytes | ACK | **M** layout, untested |
 | `0x55` | SERIAL_OUT | 10 bytes | ACK | **M** layout, untested |
@@ -111,10 +111,10 @@ The first data byte selects a sub-operation (high nibble) and a preset
 |---|---|---|---|
 | `0x00 \| n` | 1 | read stored preset `n` | **HW** |
 | `0x80` | 1 | read the live output; reply index is the active preset. The low nibble is ignored | **HW** |
-| `0x20 \| n` | 10 | replace the live output of the active preset `n`. Volatile. Reads back correctly 100 ms later | **HW** (n = 0) |
-| `0x40 \| n` | 10 | save preset `n` to flash | **S**, to verify (E3) |
-| `0x60 \| n` | 10 | possibly also a save; name guessed by its source | **S**, to verify (E3) |
-| `0xA0 \| n` | 10, zeros after byte 0 | make preset `n` active | **M** |
+| `0x20 \| n` | 10 | set the live output of the active preset `n`: on/off, voltage, current. **The OVP and OCP fields are ignored** (acknowledged, not applied). Volatile | **HW** (n = 0, 9) |
+| `0x40 \| n` | 10 | save preset `n` to flash, any of 0–9. Saving the **active** preset also replaces its live record, OVP/OCP included, which take effect at once. This is the only way to change protection limits | **HW** (persists across power-cycle) |
+| `0x60 \| n` | 10 | named "SaveGroup" in a decompile; not needed and never sent | **S** |
+| `0xA0 \| n` | 10, zeros after byte 0 | make preset `n` active, 0 included. Its stored values become the live output; the output stays as it was | **HW** |
 
 ## SYSTEM_INFO (8 bytes)
 
@@ -131,22 +131,41 @@ Firmware before 1.3 likely returns only the first six bytes. **I**
 
 ## Firmware behaviour to work around
 
-1. **The live-output write replaces every field.** Read with `0x80`, change
+1. **The on/off byte from `0x80` can be wrong.** Saving the active preset
+   rewrites the live record, on/off byte included, without switching the
+   output. We saw `0x80` report off while BASIC_INFO showed the output
+   regulating in CC. Take the output state from BASIC_INFO's mode (CC or CV
+   means on). **HW**
+2. **Protection limits only change through a save.** The live-output write
+   ignores OVP and OCP. Save the active preset (`0x40 | active`) with its
+   current setpoints and the new limits. They apply immediately: an OVP below
+   the output voltage tripped within 150 ms. This also stores them in flash.
+   **HW**
+3. **The live-output write replaces every field it honours.** Read, change
    what you mean to, write it all back. Partial or zero fields glitch the
    output. **M**
-2. **Writes apply asynchronously.** Reading back sooner than about 100 ms
+4. **Writes apply asynchronously.** Reading back sooner than about 100 ms
    after a write can return the old values. **M**
-3. **Turning off.** The DLL writes off with zero setpoints, waits 40 ms, then
+5. **Turning off.** The DLL writes off with zero setpoints, waits 40 ms, then
    writes off again with the real setpoints. We do the same, and the
    setpoints survive it. **HW**
-4. **Activating a preset while preset 0 is active can turn the output on.**
-   The unit boots into preset 0. Turn the output off first and check it is
-   still off afterwards. **S**, to verify (E6)
-5. **Preset 0 is the boot default** and is not meant to be edited; the
-   official software only edits presets 1–9. **M**
-6. **Clearing a latched fault** takes output off plus roughly 150 ms. **S**
-7. **Stale replies.** After a timeout, the late reply can arrive in answer to
+6. **The preset-0 bug.** Others report that activating a preset while preset
+   0 is active turns the output on. On firmware 1.5 we could not reproduce it:
+   twice from preset 0 with the output off (once straight after power-up),
+   and once activating a preset whose stored on/off byte was 1. We still
+   check the output after every activation and turn it off if it came on.
+   **S** for the bug, **HW** for its absence on 1.5
+7. **Switching back to preset 0 works** on firmware 1.5, despite reports
+   that it needs a reboot. Each preset's live values persist in RAM across
+   switches until power-cycle. **HW**
+8. **Clearing a latched fault** takes a live write with the output off, plus
+   about 150 ms. **HW**
+9. **Stale replies.** After a timeout, the late reply can arrive in answer to
    the next request. Drain before each request and match replies by opcode. **M**
+10. **After power-up** the unit appears on USB for about two seconds and then
+    disconnects until it is put in USBD mode (double-tap ◀). It boots into
+    preset 0 with the output off unless auto-on is set. Presets and system
+    settings persist. **HW**
 
 ## Credits
 

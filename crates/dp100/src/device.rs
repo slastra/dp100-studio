@@ -11,6 +11,9 @@
 //! - Nothing turns the output on except [`Device::set_output`]`(true)`.
 //! - A write that timed out is only resent if reading back shows it didn't
 //!   land, because not every write is safe to repeat.
+//! - Whether the output is on comes from the measurements, not from the
+//!   output record's on/off byte, because the two can disagree (saving the
+//!   active preset rewrites the byte without switching anything).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -127,8 +130,21 @@ impl<T: Transport, C: Clock> Device<T, C> {
         BasicInfo::parse(&self.read(op::BASIC_INFO, &[])?)
     }
 
-    /// The live output: active preset index, on/off, setpoints, protection.
+    /// The live output: active preset index, setpoints, protection, and
+    /// whether the output is on. `on` reflects the measurements (CC or CV
+    /// means on), not the record's on/off byte, which can be stale.
     pub fn output(&mut self) -> Result<Setpoints> {
+        let rec = self.output_record()?;
+        let m = self.basic_info()?;
+        Ok(Setpoints {
+            on: m.output_on().unwrap_or(rec.on),
+            ..rec
+        })
+    }
+
+    /// The live output record exactly as the device reports it, including an
+    /// on/off byte that may not match the output (see [`Device::output`]).
+    pub fn output_record(&mut self) -> Result<Setpoints> {
         Setpoints::parse(&self.read(op::BASIC_SET, &[sub::READ_CURRENT])?)
     }
 
@@ -167,9 +183,11 @@ impl<T: Transport, C: Clock> Device<T, C> {
         })
     }
 
-    /// Changes the live output's over-voltage and over-current trips. Refuses
-    /// limits below the present setpoints, which would trip the moment the
-    /// output came on.
+    /// Changes the active preset's over-voltage and over-current trips. They
+    /// take effect at once and are also stored in the preset, because the
+    /// only way the firmware accepts new limits is a save of the active
+    /// preset (the live-output write ignores them). Refuses limits below the
+    /// present setpoints, which would trip as soon as the output is on.
     pub fn set_protection(&mut self, ovp_mv: u16, ocp_ma: u16) -> Result<Setpoints> {
         let cur = self.output()?;
         let ovp_mv = round_10mv(ovp_mv);
@@ -189,18 +207,37 @@ impl<T: Transport, C: Clock> Device<T, C> {
                 setpoint: cur.iset_ma.into(),
             });
         }
-        self.write_live(Setpoints {
+        // The on/off byte is written as the output's real state so the record
+        // stays truthful; it does not switch anything.
+        let want = Setpoints {
             ovp_mv,
             ocp_ma,
             ..cur
-        })
+        };
+        let limits = |a: &Setpoints| a.ovp_mv == ovp_mv && a.ocp_ma == ocp_ma;
+        self.write_landed(
+            op::BASIC_SET,
+            &want.encode(sub::save_preset(cur.index)),
+            |d| Ok(limits(&d.output_record()?)),
+        )?;
+        self.wait_settle();
+        let got = self.output()?;
+        if !limits(&got) || got.on != cur.on {
+            return Err(Error::VerifyFailed(format!(
+                "asked for {}, device reports {}",
+                describe(&want),
+                describe(&got)
+            )));
+        }
+        Ok(got)
     }
 
     /// Turns the output on or off, leaving every setpoint as it is. Asking
     /// for the state it is already in sends nothing.
     pub fn set_output(&mut self, on: bool) -> Result<Setpoints> {
+        let rec = self.output_record()?;
         let cur = self.output()?;
-        if cur.on == on {
+        if cur.on == on && rec.on == on {
             return Ok(cur);
         }
         if !on {
@@ -478,12 +515,10 @@ fn decode(r: &[u8; REPORT_LEN]) -> Result<frame::Frame> {
     Ok(frame::decode(r)?)
 }
 
+/// What a live-output write controls. Its OVP and OCP fields are ignored by
+/// the firmware, so they are not compared.
 fn live_matches(got: &Setpoints, want: &Setpoints) -> bool {
-    got.on == want.on
-        && got.vset_mv == want.vset_mv
-        && got.iset_ma == want.iset_ma
-        && got.ovp_mv == want.ovp_mv
-        && got.ocp_ma == want.ocp_ma
+    got.on == want.on && got.vset_mv == want.vset_mv && got.iset_ma == want.iset_ma
 }
 
 fn describe(s: &Setpoints) -> String {

@@ -15,5 +15,12 @@ All notable changes to this project are documented here. The format follows
 - `sim` feature: a simulated DP100 (presets, resistive load, CC/CV, latched
   trips, no-input, injected transport faults) and a test suite against it.
 - Hardware-in-the-loop tests, gated behind `DP100_HIL=1`.
+
+### Changed
+- `Device::output` takes the on/off state from the measurements; the
+  device's own on/off byte can be stale. The raw record is
+  `Device::output_record`.
+- `set_protection` saves the active preset, the only write the firmware
+  honours OVP and OCP from.
 - `dp100` CLI: `list`, `info`, `status`, `watch`, `set`, `on`, `off`,
   `protect`, `clear`, `preset [save|use]`, `system [set]`, `raw`.

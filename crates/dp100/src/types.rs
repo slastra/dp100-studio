@@ -195,6 +195,16 @@ impl BasicInfo {
         })
     }
 
+    /// Whether the output is actually on: regulating in CC or CV. `None`
+    /// for a mode byte we don't know.
+    pub fn output_on(&self) -> Option<bool> {
+        match self.mode {
+            Mode::ConstantCurrent | Mode::ConstantVoltage => Some(true),
+            Mode::Off | Mode::NoInput => Some(false),
+            Mode::Unknown(_) => None,
+        }
+    }
+
     pub fn power_mw(&self) -> u32 {
         u32::from(self.vout_mv) * u32::from(self.iout_ma) / 1000
     }

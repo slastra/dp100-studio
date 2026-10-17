@@ -58,7 +58,7 @@ fn setpoint_change_never_turns_output_on() {
     let (mut dev, h, _) = open();
     let after = dev.set_setpoint(5_000, 100).unwrap();
     assert!(!after.on);
-    assert!(!h.snapshot().live.on);
+    assert!(!h.snapshot().output_on);
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn setpoints_above_protection_are_refused() {
             ..
         })
     ));
-    assert_eq!(live_writes(&h).len(), 1, "only the protection write");
+    assert!(live_writes(&h).is_empty(), "refused before any live write");
 }
 
 #[test]
@@ -121,12 +121,14 @@ fn asking_for_the_current_state_sends_nothing() {
 #[test]
 fn activating_from_preset_zero_never_leaves_output_on() {
     let (mut dev, h, _) = open();
+    // Reported on older firmware; the simulator only does it on request.
+    h.lock().preset0_bug = true;
     assert_eq!(dev.output().unwrap().index, 0);
     let a = dev.activate_preset(9).unwrap();
     assert_eq!(a.output.index, 9);
     assert!(!a.output.on);
     assert!(a.forced_off, "the simulated bug turned it on");
-    assert!(!h.snapshot().live.on);
+    assert!(!h.snapshot().output_on);
     assert_eq!(a.output.vset_mv, 10_000, "preset 9's setpoints are live");
 }
 
@@ -136,13 +138,12 @@ fn activating_with_output_on_turns_it_off_first() {
     let a = dev.activate_preset(1).unwrap();
     assert!(a.was_on);
     assert!(!a.output.on);
-    assert!(!h.snapshot().live.on);
+    assert!(!h.snapshot().output_on);
 }
 
 #[test]
 fn activating_without_the_bug_is_quiet() {
-    let (mut dev, h, _) = open();
-    h.lock().preset0_bug = false;
+    let (mut dev, _, _) = open();
     let a = dev.activate_preset(1).unwrap();
     assert!(!a.forced_off && !a.was_on && !a.output.on);
 }
@@ -288,7 +289,6 @@ fn corrupt_replies_give_up_eventually() {
 #[test]
 fn a_lost_write_ack_is_not_resent_when_the_write_landed() {
     let (mut dev, h, _) = open();
-    h.lock().preset0_bug = false;
     h.drop_replies(1);
     let a = dev.activate_preset(3).unwrap();
     assert_eq!(a.output.index, 3);
@@ -315,4 +315,59 @@ fn writes_wait_for_the_settle_window() {
     dev.set_setpoint(3_100, 100).unwrap();
     // Each write waits out the settle window before its readback.
     assert!(clock.elapsed() - t0 >= Options::default().settle * 2);
+}
+
+#[test]
+fn protection_is_set_by_saving_the_active_preset() {
+    let (mut dev, h, _) = open_with_output_on();
+    let got = dev.set_protection(12_000, 1_500).unwrap();
+    assert_eq!((got.ovp_mv, got.ocp_ma), (12_000, 1_500));
+    assert!(got.on, "output untouched");
+    let st = h.snapshot();
+    assert!(st.output_on);
+    assert_eq!(st.presets[0].ovp_mv, 12_000, "stored in the preset too");
+    assert!(st.presets[0].on, "record kept truthful");
+    assert!(live_writes(&h).is_empty());
+}
+
+#[test]
+fn protection_set_below_the_output_trips() {
+    let (mut dev, h, _) = open_with_output_on();
+    // What the real unit did: limits from a save apply immediately.
+    let mut s = h.snapshot().live;
+    s.ovp_mv = 1_000;
+    dev.raw(op::BASIC_SET, &s.encode(op::sub::save_preset(0)))
+        .unwrap();
+    let m = dev.basic_info().unwrap();
+    assert_eq!(m.fault, Fault::OverVoltage);
+    assert!(!dev.output().unwrap().on);
+}
+
+/// The real unit: after saving the active preset with its on byte clear,
+/// `0x80` says off while the output keeps regulating.
+fn desync_record(dev: &mut SimDev, h: &SimHandle) {
+    let mut s = h.snapshot().live;
+    s.on = false;
+    dev.raw(op::BASIC_SET, &s.encode(op::sub::save_preset(s.index)))
+        .unwrap();
+    assert!(!dev.output_record().unwrap().on);
+    assert!(h.snapshot().output_on);
+}
+
+#[test]
+fn a_stale_record_does_not_hide_a_live_output() {
+    let (mut dev, h, _) = open_with_output_on();
+    desync_record(&mut dev, &h);
+    assert!(dev.output().unwrap().on);
+    dev.set_output(false).unwrap();
+    assert!(!h.snapshot().output_on);
+}
+
+#[test]
+fn a_stale_record_does_not_make_setpoint_changes_turn_off() {
+    let (mut dev, h, _) = open_with_output_on();
+    desync_record(&mut dev, &h);
+    let got = dev.set_setpoint(4_000, 300).unwrap();
+    assert!(got.on);
+    assert!(h.snapshot().output_on);
 }

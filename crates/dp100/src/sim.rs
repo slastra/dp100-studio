@@ -43,8 +43,11 @@ pub struct Write {
 pub struct State {
     pub presets: [Setpoints; 10],
     pub active: u8,
-    /// The live output of the active preset.
+    /// The live output record of the active preset, as `0x80` reports it.
+    /// Its `on` byte can disagree with `output_on`, as on the real unit.
     pub live: Setpoints,
+    /// Whether the output is physically on.
+    pub output_on: bool,
     pub system: [u8; 8],
     pub vin_mv: u16,
     /// `None` is an open circuit.
@@ -52,7 +55,8 @@ pub struct State {
     pub fault: Fault,
     pub temp_dc: i16,
     /// Reproduce the firmware bug where activating a preset while preset 0
-    /// is active turns the output on.
+    /// is active turns the output on. Reported by others; not reproduced on
+    /// firmware 1.5, so off by default.
     pub preset0_bug: bool,
     /// Every request that changed or could have changed state, in order.
     pub writes: Vec<Write>,
@@ -86,6 +90,7 @@ impl Default for State {
         presets[9] = factory(9, 10_000, 5_000);
         Self {
             live: presets[0],
+            output_on: false,
             presets,
             active: 0,
             system: [0x50, 0x00, 0x1a, 0x04, 0x02, 0x02, 0x01, 0x00],
@@ -93,7 +98,7 @@ impl Default for State {
             load_ohms: None,
             fault: Fault::Ok,
             temp_dc: 281,
-            preset0_bug: true,
+            preset0_bug: false,
             writes: Vec::new(),
             requests: Vec::new(),
             drop_replies: 0,
@@ -111,7 +116,7 @@ fn measure(s: &State) -> (u16, u16, u8) {
     if s.vin_mv < 4_000 {
         return (0, 0, 0x82);
     }
-    if !s.live.on || s.fault != Fault::Ok {
+    if !s.output_on || s.fault != Fault::Ok {
         return (0, 0, 2);
     }
     let vo_max = s.vin_mv.saturating_sub(HEADROOM_MV);
@@ -150,6 +155,8 @@ impl State {
         };
         if let Some(f) = trip {
             self.fault = f;
+            self.output_on = false;
+            self.live.on = false;
         }
     }
 
@@ -234,21 +241,30 @@ impl State {
                         if !p.on {
                             self.fault = Fault::Ok;
                         }
-                        // A latched trip keeps the output off.
+                        // A latched trip keeps the output off. OVP and OCP in
+                        // this write are ignored, as on the real unit.
                         let on = p.on && self.fault == Fault::Ok;
-                        self.live = Setpoints { index: n, on, ..p };
-                        Some(vec![ACK])
-                    }
-                    // Both candidate save opcodes (experiment E3).
-                    0x40 | 0x60 => {
-                        if n > 9 || n == self.active {
-                            return Some(vec![NACK]);
-                        }
-                        self.presets[usize::from(n)] = Setpoints {
+                        self.output_on = on;
+                        self.live = Setpoints {
                             index: n,
-                            on: false,
+                            on,
+                            ovp_mv: self.live.ovp_mv,
+                            ocp_ma: self.live.ocp_ma,
                             ..p
                         };
+                        Some(vec![ACK])
+                    }
+                    0x40 => {
+                        if n > 9 {
+                            return Some(vec![NACK]);
+                        }
+                        let stored = Setpoints { index: n, ..p };
+                        self.presets[usize::from(n)] = stored;
+                        // Saving the active preset rewrites the live record,
+                        // on/off byte included, without switching the output.
+                        if n == self.active {
+                            self.live = stored;
+                        }
                         Some(vec![ACK])
                     }
                     0xA0 => {
@@ -256,11 +272,12 @@ impl State {
                             return Some(vec![NACK]);
                         }
                         let turn_on = self.preset0_bug && self.active == 0;
-                        let was_on = self.live.on;
+                        let on = (self.output_on || turn_on) && self.fault == Fault::Ok;
                         self.active = n;
+                        self.output_on = on;
                         self.live = Setpoints {
                             index: n,
-                            on: (was_on || turn_on) && self.fault == Fault::Ok,
+                            on,
                             ..self.presets[usize::from(n)]
                         };
                         Some(vec![ACK])
@@ -326,6 +343,7 @@ impl SimHandle {
         let mut s = self.lock();
         s.fault = fault;
         s.live.on = false;
+        s.output_on = false;
     }
 
     /// The next `n` replies are never sent.
