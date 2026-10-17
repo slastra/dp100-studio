@@ -743,7 +743,7 @@ fn perform(dev: &mut Dev, action: &Action, out: &Out) -> Result<Option<String>, 
                 ))
             } else if a.was_on {
                 Some(format!(
-                    "Preset {n} active. The output was turned off to switch."
+                    "Preset {n} active. The DP100 turns the output off when switching presets."
                 ))
             } else {
                 Some(format!("Preset {n} active"))

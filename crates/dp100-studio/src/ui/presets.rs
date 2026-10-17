@@ -99,8 +99,8 @@ impl Presets {
         let group = adw::PreferencesGroup::builder()
             .title("Presets")
             .description(
-                "Stored on the DP100. Switching presets loads its setpoints and \
-                 limits; the output is turned off first if it is on.",
+                "Stored on the DP100. Switching loads a preset's setpoints and \
+                 limits, and the DP100 turns the output off as it switches.",
             )
             .build();
         root.add(&group);
@@ -150,7 +150,7 @@ impl Presets {
         if self.ctx.output_on() {
             self.ctx.confirm(
                 &format!("Switch to preset {n}?"),
-                "The output is on. Switching turns it off; turn it back on when you're ready.",
+                "The output is on. The DP100 turns it off when switching presets; turn it back on when you're ready.",
                 "Switch",
                 adw::ResponseAppearance::Suggested,
                 move || ctx.act(Action::ActivatePreset(n)),
