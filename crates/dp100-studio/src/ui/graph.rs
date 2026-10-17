@@ -21,6 +21,9 @@ pub const HISTORY: Duration = Duration::from_secs(3600);
 /// Consecutive samples further apart than this are drawn with a gap between
 /// them (a disconnect, a paused worker).
 const GAP: f64 = 1.0;
+/// The right edge trails real time by this much, so the newest sample has
+/// arrived by the time its moment scrolls into view.
+const LAG: f64 = 0.12;
 
 const LEFT: f32 = 64.0;
 const RIGHT: f32 = 8.0;
@@ -157,6 +160,10 @@ mod imp {
         pub paused: Cell<bool>,
         /// The time at the right edge while paused.
         pub frozen_end: Cell<f64>,
+        /// The right-edge time of the last frame drawn.
+        pub drawn_end: Cell<f64>,
+        /// New data since the last frame.
+        pub dirty: Cell<bool>,
         pub lanes: RefCell<Vec<Lane>>,
         pub hover_x: Cell<Option<f32>>,
     }
@@ -169,6 +176,8 @@ mod imp {
                 window: Cell::new(30.0),
                 paused: Cell::new(false),
                 frozen_end: Cell::new(0.0),
+                drawn_end: Cell::new(0.0),
+                dirty: Cell::new(false),
                 lanes: RefCell::new(vec![Lane::Voltage, Lane::Current, Lane::Power]),
                 hover_x: Cell::new(None),
             }
@@ -204,6 +213,25 @@ mod imp {
                 }
             });
             obj.add_controller(motion);
+
+            // Scrolling follows the display's frame clock rather than sample
+            // arrivals: redrawing only when a sample lands moved the chart in
+            // whole-pixel steps whose size beat against the sample rate, so it
+            // visibly sped up and slowed down. A frame is only drawn once the
+            // chart has moved a quarter pixel or new data came in, so long
+            // windows don't redraw at the display rate for nothing.
+            obj.add_tick_callback(|w, _| {
+                let imp = w.imp();
+                if !imp.paused.get() && imp.origin.get().is_some() {
+                    let spp =
+                        imp.window.get() / f64::from((w.width() as f32 - LEFT - RIGHT).max(1.0));
+                    let moved = (imp.live_end() - imp.drawn_end.get()).abs() / spp;
+                    if moved >= 0.25 || imp.dirty.replace(false) {
+                        w.queue_draw();
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
         }
     }
 
@@ -229,11 +257,18 @@ mod imp {
     }
 
     impl Graph {
+        /// Real time on the history's clock, less the display lag.
+        pub fn live_end(&self) -> f64 {
+            self.origin
+                .get()
+                .map_or(0.0, |o| o.elapsed().as_secs_f64() - LAG)
+        }
+
         fn end(&self) -> f64 {
             if self.paused.get() {
                 self.frozen_end.get()
             } else {
-                self.history.borrow().latest().map_or(0.0, |b| b.t)
+                self.live_end()
             }
         }
 
@@ -258,11 +293,23 @@ mod imp {
 
             let window = self.window.get();
             let end = self.end();
-            let start = end - window;
+            self.drawn_end.set(end);
+            // Pixel columns are fixed in absolute time: a sample always lands
+            // in column floor(t / spp), whatever the window's position.
+            // Measuring columns from the moving window edge made each sample
+            // hop between neighbouring columns from frame to frame, so spikes
+            // jittered against each other as the chart scrolled. The columns
+            // themselves are then placed at sub-pixel positions, so the chart
+            // moves at a constant speed.
+            let spp = window / f64::from(plot_w);
+            let end_col = end / spp;
+            let right = LEFT + plot_w;
+            let start = end - window - spp;
+            let x_of = |t: f64| right - (end_col - t / spp) as f32;
+            let col_x = |t: f64| right - (end_col - (t / spp).floor()) as f32;
             let history = self.history.borrow();
-            let view = history.view(start, window / f64::from(plot_w), GAP);
+            let view = history.view(start, spp, GAP);
             let (visible, gap_after) = (view.items, view.gap);
-            let x_of = |t: f64| LEFT + ((t - start) / window) as f32 * plot_w;
 
             // Time grid and labels.
             let step = time_step(window);
@@ -290,7 +337,7 @@ mod imp {
                 .hover_x
                 .get()
                 .filter(|&x| x >= LEFT && x <= w - RIGHT)
-                .map(|x| start + f64::from((x - LEFT) / plot_w) * window);
+                .map(|x| (end_col - f64::from(right - x)) * spp);
             let hover_point: Option<Bucket> = hover_t.and_then(|t| history.nearest(t));
 
             for (k, lane) in lanes.iter().enumerate() {
@@ -339,7 +386,7 @@ mod imp {
                 let mut runs: Vec<Vec<Column>> = Vec::new();
                 let mut last_t = f64::NEG_INFINITY;
                 for b in visible.clone() {
-                    let x = x_of(b.t).round();
+                    let x = col_x(b.t);
                     let gap = b.t - last_t > gap_after;
                     last_t = b.t;
                     if gap || runs.is_empty() {
@@ -399,7 +446,7 @@ mod imp {
                 if let Some(p) = hover_point {
                     let v = p.last[ch];
                     let y = y_of(v);
-                    let x = x_of(p.t);
+                    let x = col_x(p.t);
                     snap.append_color(
                         &lane.color(),
                         &graphene::Rect::new(x - 2.5, y - 2.5, 5.0, 5.0),
@@ -420,7 +467,7 @@ mod imp {
             }
 
             if let Some(p) = hover_point {
-                let x = x_of(p.t);
+                let x = col_x(p.t);
                 snap.append_color(&dim, &graphene::Rect::new(x, TOP, 1.0, h - TOP - BOTTOM));
             }
         }
@@ -454,9 +501,7 @@ impl Graph {
                 f32::from(m.temp1_dc) / 10.0,
             ],
         );
-        if !imp.paused.get() {
-            self.queue_draw();
-        }
+        imp.dirty.set(true);
     }
 
     pub fn set_window(&self, secs: f64) {
@@ -467,8 +512,7 @@ impl Graph {
     pub fn set_paused(&self, paused: bool) {
         let imp = self.imp();
         if paused {
-            imp.frozen_end
-                .set(imp.history.borrow().latest().map_or(0.0, |b| b.t));
+            imp.frozen_end.set(imp.live_end());
         }
         imp.paused.set(paused);
         self.queue_draw();
