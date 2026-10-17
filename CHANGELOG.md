@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### DP100 Studio
 
+- Stepped ramps: a ramp with a `step` moves in exact increments, each held
+  for an equal share of its duration and timed from the ramp's start, so it
+  does what the DP100's scan mode does. The step editor has an "In steps"
+  switch, and `examples/sequences/scan.toml` shows it. A sequence that uses
+  stepped ramps is saved as format 2, which earlier versions refuse to open
+  rather than run as a smooth ramp.
+
 - `--simulate` powers a simulated microcontroller board instead of a
   resistor, so the graph shows what a real load does: radio bursts, a boot
   spike, and a brownout below 2.9 V.

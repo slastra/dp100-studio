@@ -201,7 +201,33 @@ pub fn validate(seq: &Sequence, dev: &DeviceLimits) -> Report {
                 to,
                 duration,
                 interval,
+                step,
             } => {
+                if let Some(size) = step {
+                    // The DP100 sets voltage in 10 mV and current in 1 mA.
+                    let (finest, unit) = match target {
+                        RampTarget::Voltage => (0.01, "10 mV"),
+                        RampTarget::Current => (0.001, "1 mA"),
+                    };
+                    if *size < finest - 1e-9 {
+                        c.err(
+                            Some(k),
+                            format!(
+                                "Step {}: ramp steps can't be finer than {unit}, the DP100's resolution.",
+                                k + 1
+                            ),
+                        );
+                    }
+                    if interval.is_some() {
+                        c.err(
+                            Some(k),
+                            format!(
+                                "Step {}: a stepped ramp is timed by its duration, so it takes no interval.",
+                                k + 1
+                            ),
+                        );
+                    }
+                }
                 if duration.0.is_zero() {
                     c.err(Some(k), format!("Step {}: a ramp needs a duration.", k + 1));
                 }
@@ -347,6 +373,53 @@ mod tests {
             ocp: 2.0,
             vo_max: 8.8,
         }
+    }
+
+    #[test]
+    fn the_examples_load_and_pass() {
+        for (name, text) in [
+            (
+                "voltage-sweep",
+                include_str!("../../../../examples/sequences/voltage-sweep.toml"),
+            ),
+            (
+                "charge-until-full",
+                include_str!("../../../../examples/sequences/charge-until-full.toml"),
+            ),
+            (
+                "scan",
+                include_str!("../../../../examples/sequences/scan.toml"),
+            ),
+        ] {
+            let s = Sequence::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let r = validate(&s, &dev());
+            assert!(r.errors.is_empty(), "{name}: {:?}", r.errors);
+            assert_eq!(s.sequence.format, s.format_needed(), "{name}: format");
+        }
+    }
+
+    #[test]
+    fn stepped_ramps_are_checked() {
+        let ramp = |step, interval| Step::Ramp {
+            target: RampTarget::Voltage,
+            to: 5.0,
+            duration: secs(20),
+            interval,
+            step: Some(step),
+        };
+        assert!(
+            validate(&seq(vec![ramp(0.1, None)]), &dev())
+                .errors
+                .is_empty()
+        );
+        let fine = validate(&seq(vec![ramp(0.005, None)]), &dev());
+        assert!(fine.errors[0].text.contains("10 mV"), "{:?}", fine.errors);
+        let both = validate(&seq(vec![ramp(0.1, Some(secs(1)))]), &dev());
+        assert!(
+            both.errors[0].text.contains("no interval"),
+            "{:?}",
+            both.errors
+        );
     }
 
     #[test]

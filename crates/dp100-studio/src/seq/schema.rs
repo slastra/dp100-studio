@@ -28,6 +28,9 @@
 //! target = "voltage"
 //! to = 3.3
 //! duration = "10s"
+//! # interval = "250ms"       # optional: time between updates
+//! # step = 0.1               # optional: exact 0.1 V increments, each held for
+//! #                          # an equal share of the duration (format 2)
 //!
 //! [[step]]
 //! type = "wait"
@@ -53,7 +56,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT: u32 = 1;
+/// The newest file format this version reads. Format 2 added stepped
+/// ramps. A file is written as format 1 unless it uses them, so an older
+/// version still opens every sequence it would run the same way, and
+/// refuses one it would run differently.
+pub const FORMAT: u32 = 2;
 
 /// A duration written as `"1h"`, `"2m30s"`, `"10s"`, `"250ms"`, or a bare
 /// number of seconds.
@@ -296,6 +303,11 @@ pub enum Step {
         /// Time between updates; defaults to [`RAMP_INTERVAL`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         interval: Option<Dur>,
+        /// Move in exact increments of this size (V or A), each held for an
+        /// equal share of `duration`, instead of smoothly. Replaces
+        /// `interval`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
     },
     /// Wait for a measurement to meet a condition, continuously for `hold`.
     WaitUntil {
@@ -339,11 +351,23 @@ impl Step {
                 target,
                 to,
                 duration,
+                step,
                 ..
-            } => match target {
-                RampTarget::Voltage => format!("Ramp voltage to {to:.2} V over {duration}"),
-                RampTarget::Current => format!("Ramp current limit to {to:.3} A over {duration}"),
-            },
+            } => {
+                let mut s = match target {
+                    RampTarget::Voltage => format!("Ramp voltage to {to:.2} V over {duration}"),
+                    RampTarget::Current => {
+                        format!("Ramp current limit to {to:.3} A over {duration}")
+                    }
+                };
+                if let Some(size) = step {
+                    s += &match target {
+                        RampTarget::Voltage => format!(" in {size:.2} V steps"),
+                        RampTarget::Current => format!(" in {size:.3} A steps"),
+                    };
+                }
+                s
+            }
             Step::WaitUntil {
                 metric,
                 op,
@@ -384,7 +408,7 @@ pub struct Meta {
 }
 
 fn format_version() -> u32 {
-    FORMAT
+    1
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -413,7 +437,7 @@ impl Sequence {
         Self {
             sequence: Meta {
                 name: name.into(),
-                format: FORMAT,
+                format: 1,
                 on_abort: OnAbort::OutputOff,
             },
             limits: Limits::default(),
@@ -432,8 +456,19 @@ impl Sequence {
         Ok(s)
     }
 
+    /// The oldest format that holds everything this sequence uses.
+    pub fn format_needed(&self) -> u32 {
+        let stepped = self
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Ramp { step: Some(_), .. }));
+        if stepped { 2 } else { 1 }
+    }
+
     pub fn to_toml(&self) -> String {
-        toml::to_string_pretty(self).expect("sequences always serialize")
+        let mut s = self.clone();
+        s.sequence.format = self.format_needed();
+        toml::to_string_pretty(&s).expect("sequences always serialize")
     }
 }
 
@@ -512,6 +547,24 @@ timeout = "1h"
         ));
         let again = Sequence::from_toml(&s.to_toml()).unwrap();
         assert_eq!(again, s);
+    }
+
+    #[test]
+    fn stepped_ramps_need_format_2() {
+        let mut s = Sequence::from_toml(EXAMPLE).unwrap();
+        assert!(s.to_toml().contains("format = 1"));
+        s.steps.push(Step::Ramp {
+            target: RampTarget::Voltage,
+            to: 5.0,
+            duration: Dur(Duration::from_secs(20)),
+            interval: None,
+            step: Some(0.1),
+        });
+        let text = s.to_toml();
+        assert!(text.contains("format = 2"), "{text}");
+        assert!(text.contains("step = 0.1"), "{text}");
+        let again = Sequence::from_toml(&text).unwrap();
+        assert_eq!(again.steps, s.steps);
     }
 
     #[test]

@@ -37,10 +37,14 @@ pub fn sequences_dir() -> PathBuf {
     glib::user_data_dir().join("dp100-studio").join("sequences")
 }
 
-const EXAMPLES: [(&str, &str); 2] = [
+const EXAMPLES: [(&str, &str); 3] = [
     (
         "voltage-sweep.toml",
         include_str!("../../../../../examples/sequences/voltage-sweep.toml"),
+    ),
+    (
+        "scan.toml",
+        include_str!("../../../../../examples/sequences/scan.toml"),
     ),
     (
         "charge-until-full.toml",
@@ -125,6 +129,7 @@ fn new_step(kind: &str) -> Option<Step> {
             to: 5.0,
             duration: d(10),
             interval: None,
+            step: None,
         },
         "until" => Step::WaitUntil {
             metric: Metric::Current,

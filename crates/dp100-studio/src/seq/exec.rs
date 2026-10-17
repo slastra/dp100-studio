@@ -11,7 +11,9 @@
 
 use std::time::{Duration, Instant};
 
-use super::schema::{Metric, OnAbort, OnTimeout, RAMP_INTERVAL, RampTarget, Sequence, Step};
+use super::schema::{
+    MIN_RAMP_INTERVAL, Metric, OnAbort, OnTimeout, RAMP_INTERVAL, RampTarget, Sequence, Step,
+};
 
 /// The measurements a `wait_until` can test.
 #[derive(Debug, Clone, Copy, Default)]
@@ -71,6 +73,8 @@ enum Phase {
         duration: Duration,
         interval: Duration,
         next: Instant,
+        /// A stepped ramp: its increment and how many it has made.
+        step: Option<(f64, u32)>,
     },
     Until {
         since: Option<Instant>,
@@ -243,6 +247,7 @@ impl Run {
                         to,
                         duration,
                         interval,
+                        step,
                     },
                 ) => {
                     let (v0, i0) = t.setpoints()?;
@@ -259,6 +264,7 @@ impl Run {
                         duration: duration.0,
                         interval,
                         next: now + interval,
+                        step: step.map(|s| (s, 0)),
                     };
                     return Ok(());
                 }
@@ -271,19 +277,43 @@ impl Run {
                         duration,
                         interval,
                         next,
+                        step,
                     },
                     _,
                 ) => {
                     let done = now >= t0 + duration;
-                    if !done && now < next {
-                        return Ok(());
-                    }
-                    let frac = if done {
-                        1.0
-                    } else {
-                        now.saturating_duration_since(t0).as_secs_f64() / duration.as_secs_f64()
+                    let elapsed = now.saturating_duration_since(t0).as_secs_f64();
+                    let frac = elapsed / duration.as_secs_f64();
+                    let value = match step {
+                        None => {
+                            if !done && now < next {
+                                return Ok(());
+                            }
+                            if done { to } else { from + (to - from) * frac }
+                        }
+                        // Exact increments, each timed from the start so
+                        // late polls don't add up.
+                        Some((size, made)) => {
+                            let n = increments(from, to, size);
+                            let k = if done {
+                                n
+                            } else {
+                                ((frac * f64::from(n)) as u32).min(n)
+                            };
+                            if !done && (k == made || now < next) {
+                                return Ok(());
+                            }
+                            if let Phase::Ramp { step, .. } = &mut self.phase {
+                                *step = Some((size, k));
+                            }
+                            if k == n {
+                                to
+                            } else {
+                                from + (to - from).signum() * size * f64::from(k)
+                            }
+                        }
                     };
-                    let value = milli(from + (to - from) * frac);
+                    let value = milli(value);
                     let (v0, i0) = t.setpoints()?;
                     match target {
                         RampTarget::Voltage => t.set(value, i0)?,
@@ -292,8 +322,14 @@ impl Run {
                     if done {
                         self.next();
                     } else {
-                        if let Phase::Ramp { next, .. } = &mut self.phase {
-                            *next = now + interval;
+                        if let Phase::Ramp { next, step, .. } = &mut self.phase {
+                            // A stepped ramp only waits out the write rate.
+                            *next = now
+                                + if step.is_some() {
+                                    MIN_RAMP_INTERVAL
+                                } else {
+                                    interval
+                                };
                         }
                         return Ok(());
                     }
@@ -394,11 +430,35 @@ impl Run {
         match self.phase {
             Phase::Wait { until } => Some(until),
             Phase::Ramp {
-                next, t0, duration, ..
+                next,
+                t0,
+                duration,
+                step: None,
+                ..
             } => Some(next.min(t0 + duration)),
+            Phase::Ramp {
+                from,
+                to,
+                next,
+                t0,
+                duration,
+                step: Some((size, made)),
+                ..
+            } => {
+                let n = increments(from, to, size);
+                let due = t0 + duration.mul_f64(f64::from(made + 1) / f64::from(n));
+                Some(due.max(next).min(t0 + duration))
+            }
             _ => None,
         }
     }
+}
+
+/// How many increments of `size` a stepped ramp takes from `from` to `to`;
+/// the last one may be short.
+fn increments(from: f64, to: f64, size: f64) -> u32 {
+    // The tolerance keeps 1.0 to 5.0 in 0.1 steps at 40, not 41.
+    (((to - from).abs() / size) - 1e-6).ceil().max(1.0) as u32
 }
 
 fn milli(x: f64) -> u16 {
@@ -601,6 +661,7 @@ mod tests {
                 to: 2.0,
                 duration: secs(1.0),
                 interval: Some(secs(0.25)),
+                step: None,
             }]),
             t0,
         );
@@ -630,6 +691,98 @@ mod tests {
             })
             .collect();
         assert_eq!(volts, vec![1_250, 1_500, 1_750, 2_000]);
+    }
+
+    fn stepped(to: f64, duration: f64, step: f64) -> Sequence {
+        seq(vec![Step::Ramp {
+            target: RampTarget::Voltage,
+            to,
+            duration: secs(duration),
+            interval: None,
+            step: Some(step),
+        }])
+    }
+
+    fn sets(r: &Recorder) -> Vec<(Duration, u16)> {
+        r.writes
+            .iter()
+            .map(|w| match w {
+                DryWrite::Set { at, vset_mv, .. } => (*at, *vset_mv),
+                _ => panic!("unexpected {w:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stepped_ramps_scan_in_exact_increments() {
+        // The DP100's scan: 1 V to 5 V in 0.1 V steps, 500 ms each.
+        let t0 = Instant::now();
+        let mut run = Run::new(stepped(5.0, 20.0, 0.1), t0);
+        let mut r = Recorder {
+            v: 1_000,
+            i: 100,
+            ..Recorder::default()
+        };
+        drive(
+            &mut run,
+            t0,
+            Duration::from_secs(25),
+            |_| Measure::default(),
+            &mut r,
+        );
+        let got = sets(&r);
+        assert_eq!(got.len(), 40);
+        for (k, (at, mv)) in got.iter().enumerate() {
+            let k = k as u32 + 1;
+            assert_eq!(*mv as u32, 1_000 + 100 * k, "value {k}");
+            assert_eq!(*at, Duration::from_millis(500) * k, "time of {k}");
+        }
+    }
+
+    #[test]
+    fn stepped_ramps_end_on_the_target_and_go_down_too() {
+        let t0 = Instant::now();
+        let mut run = Run::new(stepped(1.0, 1.0, 0.3), t0);
+        let mut r = Recorder {
+            v: 2_000,
+            i: 100,
+            ..Recorder::default()
+        };
+        drive(
+            &mut run,
+            t0,
+            Duration::from_secs(3),
+            |_| Measure::default(),
+            &mut r,
+        );
+        let mv: Vec<u16> = sets(&r).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(mv, vec![1_700, 1_400, 1_100, 1_000]);
+    }
+
+    #[test]
+    fn stepped_ramps_do_not_drift_when_polls_are_late() {
+        let t0 = Instant::now();
+        let mut run = Run::new(stepped(3.0, 10.0, 0.1), t0);
+        let mut r = Recorder {
+            v: 2_000,
+            i: 100,
+            ..Recorder::default()
+        };
+        // Polls 70 ms apart never land on a step boundary.
+        let mut now = t0;
+        while *run.tick(now, &Measure::default(), &mut r) == Outcome::Running {
+            now += Duration::from_millis(70);
+            r.t = now - t0;
+        }
+        let got = sets(&r);
+        assert_eq!(got.len(), 10);
+        for (k, (at, _)) in got.iter().enumerate() {
+            let due = Duration::from_secs(1) * (k as u32 + 1);
+            assert!(
+                *at >= due && *at < due + Duration::from_millis(70),
+                "step {k} at {at:?}"
+            );
+        }
     }
 
     #[test]

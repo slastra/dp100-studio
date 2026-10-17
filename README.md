@@ -80,8 +80,9 @@ charger that's about 8.8 V. A 20 V PD charger gives about 19.7 V, and the full
 ## Sequences
 
 A sequence is a list of steps: set the voltage and current, turn the output
-on or off, wait, ramp a setpoint, wait until a measurement meets a condition
-(say, current below 50 mA for 30 s), and repeat blocks. They're edited on the
+on or off, wait, ramp a setpoint (smoothly, or in exact steps like the
+DP100's own scan mode), wait until a measurement meets a condition (say,
+current below 50 mA for 30 s), and repeat blocks. They're edited on the
 Sequences page and stored as TOML; see
 [examples/sequences](examples/sequences) for the format.
 

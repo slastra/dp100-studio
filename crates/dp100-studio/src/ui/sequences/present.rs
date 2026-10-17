@@ -105,14 +105,21 @@ pub fn line(step: &Step) -> (String, Option<String>) {
             to,
             duration,
             interval,
+            step,
         } => (
             match target {
-                RampTarget::Voltage => format!("Voltage to {to:.2} V over {}", dur(duration)),
+                RampTarget::Voltage => {
+                    format!("Voltage to {to:.2}\u{202f}V over {}", dur(duration))
+                }
                 RampTarget::Current => {
-                    format!("Current limit to {to:.3} A over {}", dur(duration))
+                    format!("Current limit to {to:.3}\u{202f}A over {}", dur(duration))
                 }
             },
-            interval.map(|i| format!("Updates every {}", dur(&i))),
+            match (step, target) {
+                (Some(s), RampTarget::Voltage) => Some(format!("In steps of {s:.2}\u{202f}V")),
+                (Some(s), RampTarget::Current) => Some(format!("In steps of {s:.3}\u{202f}A")),
+                (None, _) => interval.map(|i| format!("Updates every {}", dur(&i))),
+            },
         ),
         Step::WaitUntil {
             metric: m,

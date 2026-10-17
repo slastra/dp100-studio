@@ -1,0 +1,40 @@
+# The DP100's own scan mode as a sequence: 1 V to 5 V in exact 0.1 V steps,
+# each held for 500 ms, with the current limit at 100 mA. 40 steps over 20 s,
+# then a last 500 ms at 5 V.
+
+[sequence]
+name = "Scan 1 V to 5 V"
+format = 2
+on_abort = "output_off"
+
+[limits]
+max_voltage = 5.0
+max_current = 0.1
+
+[[step]]
+type = "set"
+voltage = 1.0
+current = 0.1
+
+[[step]]
+type = "output"
+on = true
+
+[[step]]
+type = "wait"
+duration = "500ms"
+
+[[step]]
+type = "ramp"
+target = "voltage"
+to = 5.0
+duration = "20s"
+step = 0.1
+
+[[step]]
+type = "wait"
+duration = "500ms"
+
+[[step]]
+type = "output"
+on = false

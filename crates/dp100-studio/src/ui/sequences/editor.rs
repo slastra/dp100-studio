@@ -150,6 +150,7 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
             to,
             duration,
             interval,
+            step,
         } => {
             let t = combo(
                 "Ramp",
@@ -161,15 +162,37 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 RampTarget::Voltage => "Volts",
                 RampTarget::Current => "Amps",
             });
-            let vv = v.clone();
-            t.connect_selected_notify(move |t| {
-                vv.set_subtitle(if t.selected() == 1 { "Amps" } else { "Volts" });
-            });
             let d = DurField::new("Over", Some(duration), false);
+            // Stepped: exact increments, each held for an equal share of
+            // the duration, like the DP100's own scan mode.
+            let use_step = adw::SwitchRow::builder()
+                .title("In steps")
+                .subtitle("Holds each value for an equal share of the time")
+                .active(step.is_some())
+                .build();
+            let size = spin("Step size", 0.001, 30.0, 0.01, 3, step.unwrap_or(0.1));
+            let unit = |current: bool| if current { "Amps" } else { "Volts" };
+            size.set_subtitle(unit(target == RampTarget::Current));
             let iv = DurField::new("Update every", interval, true);
+            use_step
+                .bind_property("active", &size, "sensitive")
+                .sync_create()
+                .build();
+            use_step
+                .bind_property("active", &iv.row, "sensitive")
+                .invert_boolean()
+                .sync_create()
+                .build();
+            let (vv, ss) = (v.clone(), size.clone());
+            t.connect_selected_notify(move |t| {
+                vv.set_subtitle(unit(t.selected() == 1));
+                ss.set_subtitle(unit(t.selected() == 1));
+            });
             group.add(&t);
             group.add(&v);
             group.add(&d.row);
+            group.add(&use_step);
+            group.add(&size);
             group.add(&iv.row);
             let (dd, ii) = (d.clone(), iv.clone());
             (
@@ -182,7 +205,12 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                         },
                         to: v.value(),
                         duration: dd.required()?,
-                        interval: ii.read()?,
+                        interval: if use_step.is_active() {
+                            None
+                        } else {
+                            ii.read()?
+                        },
+                        step: use_step.is_active().then(|| size.value()),
                     })
                 }),
                 vec![d, iv],
