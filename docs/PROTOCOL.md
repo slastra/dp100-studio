@@ -117,7 +117,7 @@ The first data byte selects a sub-operation (high nibble) and a preset
 | `0x20 \| n` | 10 | set the live output of the active preset `n`: on/off, voltage, current. **The OVP and OCP fields are ignored** (acknowledged, not applied). Volatile | **HW** (n = 0, 9) |
 | `0x40 \| n` | 10 | save preset `n` to flash, any of 0–9. Saving the **active** preset also replaces its live record, OVP/OCP included, which take effect at once. This is the only way to change protection limits | **HW** (persists across power-cycle) |
 | `0x60 \| n` | 10 | named "SaveGroup" in a decompile; not needed and never sent | **S** |
-| `0xA0 \| n` | 10, zeros after byte 0 | make preset `n` active, 0 included. Its stored values become the live output; the output stays as it was | **HW** |
+| `0xA0 \| n` | 10, zeros after byte 0 | make preset `n` active, 0 included. Its stored values become the live output, and **the output is switched off** if it was on | **HW** |
 
 ## SYSTEM_INFO (8 bytes)
 
@@ -158,14 +158,17 @@ Firmware before 1.3 likely returns only the first six bytes. **I**
    and once activating a preset whose stored on/off byte was 1. We still
    check the output after every activation and turn it off if it came on.
    **S** for the bug, **HW** for its absence on 1.5
-7. **Switching back to preset 0 works** on firmware 1.5, despite reports
+7. **Switching presets turns the output off.** With the output on,
+   activating any preset leaves it off within 150 ms, at the new preset's
+   setpoints. Seen twice on firmware 1.5. **HW**
+8. **Switching back to preset 0 works** on firmware 1.5, despite reports
    that it needs a reboot. Each preset's live values persist in RAM across
    switches until power-cycle. **HW**
-8. **Clearing a latched fault** takes a live write with the output off, plus
+9. **Clearing a latched fault** takes a live write with the output off, plus
    about 150 ms. **HW**
-9. **Stale replies.** After a timeout, the late reply can arrive in answer to
+10. **Stale replies.** After a timeout, the late reply can arrive in answer to
    the next request. Drain before each request and match replies by opcode. **M**
-10. **After power-up** the unit appears on USB for about two seconds and then
+11. **After power-up** the unit appears on USB for about two seconds and then
     disconnects until it is put in USBD mode (double-tap ◀). It boots into
     preset 0 with the output off unless auto-on is set. Presets and system
     settings persist. **HW**
