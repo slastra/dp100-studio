@@ -3,6 +3,7 @@ mod ctx;
 mod device;
 mod graph;
 mod history;
+mod log;
 mod presets;
 mod readouts;
 
@@ -18,6 +19,7 @@ use crate::worker::{Action, Command, Event, Problem, Source, Worker};
 use controls::Controls;
 use ctx::Ctx;
 use device::Device;
+use log::Log;
 use presets::Presets;
 use readouts::Readouts;
 
@@ -53,6 +55,7 @@ struct Window {
     title: adw::WindowTitle,
     switcher: adw::ViewSwitcher,
     output_chip: gtk::Label,
+    recording_chip: gtk::Label,
     banner: adw::Banner,
     stack: gtk::Stack,
     status: adw::StatusPage,
@@ -60,6 +63,7 @@ struct Window {
     readouts: Readouts,
     presets: Rc<Presets>,
     device: Rc<Device>,
+    log: Rc<Log>,
     simulated: bool,
 }
 
@@ -195,6 +199,13 @@ fn build(
         .visible(false)
         .build();
     header.pack_start(&output_chip);
+    let recording_chip = gtk::Label::builder()
+        .label("REC")
+        .css_classes(["recording-chip"])
+        .tooltip_text("Recording to CSV. Stop it on the Log page.")
+        .visible(false)
+        .build();
+    header.pack_start(&recording_chip);
 
     let menu = gio::Menu::new();
     let device_section = gio::Menu::new();
@@ -232,6 +243,7 @@ fn build(
     let readouts = Readouts::new(controls);
     let presets = Presets::new(ctx.clone());
     let device = Device::new(ctx.clone(), simulated);
+    let log = Log::new(ctx.clone());
 
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
@@ -246,6 +258,7 @@ fn build(
         "Presets",
         "view-list-symbolic",
     );
+    views.add_titled_with_icon(&log.root, Some("log"), "Log", "media-record-symbolic");
     views.add_titled_with_icon(
         &device.root,
         Some("device"),
@@ -280,6 +293,7 @@ fn build(
         title,
         switcher,
         output_chip,
+        recording_chip,
         banner,
         stack,
         status,
@@ -287,6 +301,7 @@ fn build(
         readouts,
         presets,
         device,
+        log,
         simulated,
     }
 }
@@ -381,6 +396,23 @@ impl Window {
             Event::System(s) => {
                 self.ctx.live.borrow_mut().system = Some(s);
                 self.device.show_system(&s);
+            }
+            Event::Energy {
+                mwh,
+                mah,
+                covered,
+                gaps,
+            } => {
+                self.readouts.show_energy(mwh, mah);
+                self.log.show_energy(mwh, mah, covered, gaps);
+            }
+            Event::Recording(r) => {
+                self.recording_chip.set_visible(true);
+                self.log.show_recording(&r);
+            }
+            Event::RecordingStopped(r) => {
+                self.recording_chip.set_visible(false);
+                self.log.show_stopped(&r);
             }
             Event::Done(Ok(Some(note))) => self.ctx.toast(&note),
             Event::Done(Ok(None)) => {}

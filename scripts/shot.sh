@@ -23,7 +23,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 # sun_path caps at 108 bytes, so the runtime dir must be short.
 RT=/tmp/dps.$$
-mkdir -p "$RT"/{config,state} && chmod 700 "$RT"
+mkdir -p "$RT"/{config,state,data} && chmod 700 "$RT"
 trap 'kill $APP $SWAY 2>/dev/null; wait 2>/dev/null; rm -rf "$RT"' EXIT
 
 cat > "$RT/sway.conf" <<CONF
@@ -55,7 +55,7 @@ done
 DISP=$(basename "$SOCK")
 
 env -u DISPLAY XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" GDK_BACKEND=wayland \
-    XDG_CONFIG_HOME="$RT/config" XDG_STATE_HOME="$RT/state" \
+    XDG_CONFIG_HOME="$RT/config" XDG_STATE_HOME="$RT/state" XDG_DATA_HOME="$RT/data" \
     "$BIN" "$@" >"$RT/app.log" 2>&1 &
 APP=$!
 sleep "${SHOT_DELAY:-3}"

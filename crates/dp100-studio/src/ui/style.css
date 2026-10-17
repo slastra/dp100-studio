@@ -60,3 +60,11 @@ button.small {
   background: @accent_bg_color;
   color: @accent_fg_color;
 }
+
+.recording-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: bold;
+  color: @error_color;
+  border: 2px solid @error_color;
+}

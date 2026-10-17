@@ -20,6 +20,8 @@ adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 async-channel = "2"
 # UI to worker: the worker blocks on it with a deadline between polls.
 crossbeam-channel = "0.5"
+# SIGINT/SIGTERM as main-loop sources, so they quit cleanly.
+glib-unix = "0.22"
 
 [lints]
 workspace = true

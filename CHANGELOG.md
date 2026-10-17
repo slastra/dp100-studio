@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format follows
   protection trips, panel and safety settings, and unit details. Protection
   trips can be cleared from the banner. "Release Front Panel" stops talking
   to the DP100 so its buttons work, until Reconnect.
+- Logging: a Log page records every measurement to CSV at 10, 20, 50 or
+  100 Hz, with the setpoints, mode, fault, temperatures and energy since
+  the recording started, under `$XDG_DATA_HOME/dp100-studio/sessions`.
+  Recording runs in the worker, so a busy window never drops rows, and
+  quitting (including SIGINT or SIGTERM) finishes the file.
+- Energy (mWh) and charge (mAh) delivered since connecting, integrated
+  with the trapezoid rule; gaps from a disconnect are counted, not bridged.
 - Live graph: stacked voltage, current, power and temperature lanes, windows
   from 10 s to 1 h, pause and hover readout. History is kept at three
   resolutions, so an hour at 100 Hz draws in under a millisecond, and

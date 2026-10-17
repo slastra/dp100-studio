@@ -1,8 +1,9 @@
 //! The Monitor page: big output figures, the controls, the graph, and the
 //! details beneath.
 
+use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use dp100::{BasicInfo, Fault, Mode, Setpoints};
@@ -10,6 +11,11 @@ use dp100::{BasicInfo, Fault, Mode, Setpoints};
 use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
+use super::log::{charge, energy};
+
+/// Text readouts refresh at most this often. The graph takes every sample;
+/// labels repainting at 100 Hz while recording would only cost power.
+const LABEL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn celsius(dc: i16) -> String {
     format!("{:.1} °C", f64::from(dc) / 10.0)
@@ -143,6 +149,8 @@ pub struct Readouts {
     mode: gtk::Label,
     protection: gtk::Label,
     preset: gtk::Label,
+    delivered: gtk::Label,
+    last_labels: Cell<Option<Instant>>,
     vin: gtk::Label,
     vo_max: gtk::Label,
     temps: gtk::Label,
@@ -188,6 +196,7 @@ impl Readouts {
         let output = adw::PreferencesGroup::builder().title("Output").build();
         let protection = row(&output, "Protection");
         let preset = row(&output, "Preset");
+        let delivered = row(&output, "Delivered since connecting");
         root.append(&output);
 
         let supply = adw::PreferencesGroup::builder().title("Supply").build();
@@ -207,6 +216,8 @@ impl Readouts {
             mode,
             protection,
             preset,
+            delivered,
+            last_labels: Cell::new(None),
             vin,
             vo_max,
             temps,
@@ -216,6 +227,14 @@ impl Readouts {
 
     pub fn show_sample(&self, at: Instant, m: &BasicInfo) {
         self.graph.push(at, m);
+        if self
+            .last_labels
+            .get()
+            .is_some_and(|t| at.saturating_duration_since(t) < LABEL_INTERVAL)
+        {
+            return;
+        }
+        self.last_labels.set(Some(at));
         self.controls.show_sample(m);
         self.vout.value.set_label(&volts(m.vout_mv));
         self.iout.value.set_label(&amps(m.iout_ma));
@@ -255,5 +274,10 @@ impl Readouts {
         } else {
             o.index.to_string()
         });
+    }
+
+    pub fn show_energy(&self, mwh: f64, mah: f64) {
+        self.delivered
+            .set_label(&format!("{} · {}", energy(mwh), charge(mah)));
     }
 }

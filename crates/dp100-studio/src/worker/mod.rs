@@ -14,6 +14,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+
+use crate::logging::csv::Recorder;
+use crate::logging::energy::Energy;
 use dp100::sim::SimHandle;
 use dp100::{
     BasicInfo, Device, DeviceInfo, Error, HidrawTransport, Options, Setpoints, SystemClock,
@@ -27,9 +30,11 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 /// Measurement poll rate. The device sustains 100 Hz; 20 Hz is plenty for
 /// readouts.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// The output record is re-read every this many polls, to notice changes
-/// made on the front panel.
-const OUTPUT_EVERY: u32 = 10;
+/// How often the output record is re-read, to notice changes made on the
+/// front panel. Time-based, since the poll rate changes while recording.
+const OUTPUT_EVERY: Duration = Duration::from_millis(500);
+/// How often energy and recording status go to the UI.
+const STATUS_EVERY: Duration = Duration::from_millis(500);
 /// Consecutive failed polls before the device is treated as gone.
 const MAX_FAILED_POLLS: u32 = 10;
 
@@ -65,6 +70,15 @@ pub enum Command {
     Release,
     /// Take the device back after [`Command::Release`].
     Reclaim,
+    /// Record every measurement to a new CSV file in `dir`, polling at
+    /// `rate_hz`.
+    StartRecording {
+        rate_hz: u32,
+        dir: PathBuf,
+    },
+    StopRecording,
+    /// Zero the session's energy and charge counters.
+    ResetEnergy,
     Shutdown,
 }
 
@@ -90,6 +104,15 @@ pub struct Sample {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecordingStatus {
+    pub path: PathBuf,
+    pub rows: u64,
+    pub elapsed: Duration,
+    pub mwh: f64,
+    pub mah: f64,
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     /// Looking for a device; nothing is connected.
     Searching,
@@ -103,6 +126,17 @@ pub enum Event {
     System(SystemSettings),
     /// An action finished. `Ok` carries a note worth showing, if any.
     Done(Result<Option<String>, String>),
+    /// Energy and charge since connecting (or the last reset).
+    Energy {
+        mwh: f64,
+        mah: f64,
+        covered: Duration,
+        gaps: u32,
+    },
+    /// A recording is running.
+    Recording(RecordingStatus),
+    /// A recording ended: the file and its row count, or what went wrong.
+    RecordingStopped(Result<(PathBuf, u64), String>),
     /// The device has been closed on request.
     Released,
     Disconnected(String),
@@ -287,9 +321,81 @@ enum Ended {
     Lost(String),
 }
 
+/// What a connection carries besides the device: the session's energy
+/// counter, a recording if one is running, and the poll cadence.
+struct Session {
+    interval: Duration,
+    energy: Energy,
+    recorder: Option<Recorder>,
+    /// The live output as last read, for the setpoint columns.
+    output: Option<Setpoints>,
+    last_status: Instant,
+    last_output: Instant,
+}
+
+impl Session {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            interval: POLL_INTERVAL,
+            energy: Energy::new(POLL_INTERVAL),
+            recorder: None,
+            output: None,
+            last_status: now,
+            last_output: now,
+        }
+    }
+
+    fn set_rate(&mut self, rate_hz: u32) {
+        self.interval = Duration::from_secs_f64(1.0 / f64::from(rate_hz.clamp(1, 100)));
+        self.energy.set_interval(self.interval);
+    }
+
+    fn report_energy(&self, out: &Out) {
+        out.send(Event::Energy {
+            mwh: self.energy.mwh(),
+            mah: self.energy.mah(),
+            covered: self.energy.covered(),
+            gaps: self.energy.gaps(),
+        });
+    }
+
+    fn report_recording(&self, out: &Out, now: Instant) {
+        if let Some(r) = &self.recorder {
+            out.send(Event::Recording(RecordingStatus {
+                path: r.path().to_owned(),
+                rows: r.rows(),
+                elapsed: r.elapsed(now),
+                mwh: r.energy().mwh(),
+                mah: r.energy().mah(),
+            }));
+        }
+    }
+
+    /// Ends a running recording, reporting where it went or why it failed.
+    fn stop_recording(&mut self, out: &Out) {
+        if let Some(r) = self.recorder.take() {
+            out.send(Event::RecordingStopped(
+                r.finish()
+                    .map_err(|e| format!("Couldn't finish the recording: {e}")),
+            ));
+        }
+        self.interval = POLL_INTERVAL;
+        self.energy.set_interval(POLL_INTERVAL);
+    }
+}
+
 fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
+    let mut s = Session::new();
+    // A recording needs the setpoints from its first row on.
+    s.output = dev.output().ok();
+    let ended = poll_session(dev, cmds, out, &mut s);
+    s.stop_recording(out);
+    ended
+}
+
+fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Session) -> Ended {
     let mut next = Instant::now();
-    let mut tick: u32 = 0;
     let mut failed: u32 = 0;
     loop {
         match wait(cmds, next) {
@@ -303,27 +409,54 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
                 }
                 // Whatever happened, show the device as it now is.
                 match dev.output() {
-                    Ok(o) => out.send(Event::Output(o)),
+                    Ok(o) => {
+                        s.output = Some(o);
+                        out.send(Event::Output(o));
+                    }
                     Err(e) if is_gone(&e) => return Ended::Lost(e.to_string()),
                     Err(_) => {}
                 }
                 continue;
             }
+            Wake::Command(Command::StartRecording { rate_hz, dir }) => {
+                if s.recorder.is_none() {
+                    match Recorder::start(&dir, dev.info(), rate_hz, Instant::now()) {
+                        Ok(r) => {
+                            s.recorder = Some(r);
+                            s.set_rate(rate_hz);
+                            s.report_recording(out, Instant::now());
+                        }
+                        Err(e) => out.send(Event::RecordingStopped(Err(format!(
+                            "Couldn't start recording: {e}"
+                        )))),
+                    }
+                }
+                continue;
+            }
+            Wake::Command(Command::StopRecording) => {
+                s.stop_recording(out);
+                continue;
+            }
+            Wake::Command(Command::ResetEnergy) => {
+                s.energy = Energy::new(s.interval);
+                s.report_energy(out);
+                continue;
+            }
             Wake::Command(_) => continue,
             Wake::Tick => {}
         }
-        next += POLL_INTERVAL;
+        next += s.interval;
         let now = Instant::now();
         if next < now {
             // Fell behind (a slow write, a suspended laptop): skip ahead
             // rather than firing a burst of polls.
-            next = now + POLL_INTERVAL;
+            next = now + s.interval;
         }
 
-        match dev.basic_info() {
+        let m = match dev.basic_info() {
             Ok(m) => {
                 failed = 0;
-                out.sample(Sample { at: now, m });
+                m
             }
             Err(e) if e.is_transient() => {
                 failed += 1;
@@ -333,15 +466,35 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
                 continue;
             }
             Err(e) => return Ended::Lost(e.to_string()),
+        };
+        s.energy.add(now, m.vout_mv, m.iout_ma);
+        if let (Some(r), Some(o)) = (&mut s.recorder, &s.output)
+            && let Err(e) = r.write(now, &m, o)
+        {
+            out.send(Event::RecordingStopped(Err(format!(
+                "Recording stopped: couldn't write to {} ({e})",
+                r.path().display()
+            ))));
+            s.recorder = None;
+            s.interval = POLL_INTERVAL;
         }
+        out.sample(Sample { at: now, m });
 
-        tick = tick.wrapping_add(1);
-        if tick.is_multiple_of(OUTPUT_EVERY) {
+        if now.saturating_duration_since(s.last_output) >= OUTPUT_EVERY {
+            s.last_output = now;
             match dev.output() {
-                Ok(o) => out.send(Event::Output(o)),
+                Ok(o) => {
+                    s.output = Some(o);
+                    out.send(Event::Output(o));
+                }
                 Err(e) if e.is_transient() => {}
                 Err(e) => return Ended::Lost(e.to_string()),
             }
+        }
+        if now.saturating_duration_since(s.last_status) >= STATUS_EVERY {
+            s.last_status = now;
+            s.report_energy(out);
+            s.report_recording(out, now);
         }
     }
 }
@@ -476,6 +629,58 @@ mod tests {
         };
         assert!(r.is_err());
         next(&w, |e| matches!(e, Event::Sample(_)));
+    }
+
+    #[test]
+    fn records_at_the_requested_rate() {
+        let (w, _) = connected();
+        let dir = std::env::temp_dir().join(format!("dp100-rec-test-{}", std::process::id()));
+        w.send(Command::StartRecording {
+            rate_hz: 100,
+            dir: dir.clone(),
+        });
+        let Event::Recording(r) = next(&w, |e| matches!(e, Event::Recording(_))) else {
+            unreachable!()
+        };
+        let path = r.path.clone();
+        std::thread::sleep(Duration::from_millis(1100));
+        w.send(Command::StopRecording);
+        let Event::RecordingStopped(Ok((p, rows))) =
+            next(&w, |e| matches!(e, Event::RecordingStopped(_)))
+        else {
+            panic!("recording failed")
+        };
+        assert_eq!(p, path);
+        let text = std::fs::read_to_string(&p).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        // About 100 rows a second; allow for scheduling.
+        assert!((70..=130).contains(&rows), "{rows} rows");
+        assert_eq!(
+            text.lines().filter(|l| !l.starts_with('#')).count() as u64,
+            rows + 1
+        );
+    }
+
+    #[test]
+    fn shutting_down_finishes_the_recording() {
+        let (w, _) = connected();
+        let dir = std::env::temp_dir().join(format!("dp100-drop-test-{}", std::process::id()));
+        w.send(Command::StartRecording {
+            rate_hz: 50,
+            dir: dir.clone(),
+        });
+        let Event::Recording(r) = next(&w, |e| matches!(e, Event::Recording(_))) else {
+            unreachable!()
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        // What quitting the app does: the worker is dropped mid-recording.
+        drop(w);
+        let text = std::fs::read_to_string(&r.path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let rows = text.lines().filter(|l| !l.starts_with('#')).count();
+        // Well past the first flush, which only happens after a second.
+        assert!(rows > 5, "only {rows} lines made it to disk");
+        assert!(text.ends_with('\n'), "last row is complete");
     }
 
     #[test]

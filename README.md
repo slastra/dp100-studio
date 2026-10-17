@@ -4,8 +4,8 @@ A native Linux app for the ALIENTEK DP100 USB-C bench power supply, built with
 GTK 4 and libadwaita.
 
 > [!WARNING]
-> Early development. The protocol library, CLI and desktop app work; logging
-> and sequences are next.
+> Early development. The protocol library, CLI and desktop app work, with
+> logging; scripted sequences are next.
 
 ## What's here
 
