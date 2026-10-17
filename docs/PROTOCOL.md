@@ -22,6 +22,9 @@ Each fact carries a confidence mark:
 - Strict request/reply. There is no unsolicited or streaming data. **M**
 - The unit must be in USBD mode (double-tap ◀ on the panel). In that mode the
   front USB-A port supplies no 5 V. **S** (manual)
+- **Polling locks the front panel.** While a host polls at 20 Hz the unit
+  refuses button presses with a beep. Once the host stops talking, the buttons
+  work again; no command is needed to release them. **HW**
 
 ## Frame
 
