@@ -1,0 +1,8 @@
+/target
+
+# makepkg leftovers when a PKGBUILD is built in place.
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/dp100-studio/

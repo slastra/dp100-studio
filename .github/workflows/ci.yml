@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Needs no build, so it answers in seconds.
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # The protocol crate has no system dependencies, so it is checked on its
+  # own: a GTK packaging problem never hides a protocol regression.
+  dp100:
+    name: dp100 crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy -p dp100 --all-targets --all-features -- -D warnings
+      - name: Tests
+        run: cargo test -p dp100 --all-features
+      # Hardware tests are #[ignore]d and need DP100_HIL=1; they never run here.
+      - name: Package
+        run: cargo package -p dp100 --allow-dirty
