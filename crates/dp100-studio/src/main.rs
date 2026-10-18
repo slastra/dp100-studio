@@ -14,6 +14,10 @@ fn main() -> gtk::glib::ExitCode {
     let simulate = args.iter().any(|a| a == "--simulate");
     args.retain(|a| a != "--simulate");
 
+    // Icons that not every theme has, found when the one in use lacks them.
+    gtk::gio::resources_register_include!("dp100-studio.gresource")
+        .expect("the resources are built into the binary");
+
     let app = adw::Application::builder()
         .application_id(if simulate {
             // A separate id, so a simulated window can run beside the real one.
@@ -21,6 +25,9 @@ fn main() -> gtk::glib::ExitCode {
         } else {
             APP_ID
         })
+        // Set rather than taken from the id, so the simulated one finds the
+        // same icons: GTK adds this path's "icons" to the icon search path.
+        .resource_base_path("/io/github/slastra/DP100Studio")
         .build();
     app.connect_activate(move |app| ui::activate(app, simulate));
     // A terminal Ctrl-C or a session ending quits cleanly, which closes the

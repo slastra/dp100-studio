@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A drag handle: two columns of three dots. Drawn for DP100 Studio, for
+     icon themes without list-drag-handle-symbolic. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="#222222">
+    <circle cx="5.5" cy="3" r="1.5"/>
+    <circle cx="10.5" cy="3" r="1.5"/>
+    <circle cx="5.5" cy="8" r="1.5"/>
+    <circle cx="10.5" cy="8" r="1.5"/>
+    <circle cx="5.5" cy="13" r="1.5"/>
+    <circle cx="10.5" cy="13" r="1.5"/>
+  </g>
+</svg>
