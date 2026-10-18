@@ -162,6 +162,11 @@ impl Run {
         &self.seq.sequence.name
     }
 
+    /// Whether a power step is holding.
+    pub fn holding(&self) -> bool {
+        self.power.is_some()
+    }
+
     pub fn outcome(&self) -> &Outcome {
         &self.outcome
     }

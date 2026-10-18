@@ -12,7 +12,10 @@ All notable changes to this project are documented here. The format follows
   Power mode the app holds a power by moving the current limit, with the
   voltage at a limit you set, and a CP lamp lights while it holds. It learns
   how the load responds, so a resistor settles in about a second and a
-  battery or an LED settles without overshooting. It stops on a trip, lost
+  battery or an LED settles without overshooting. A load that suddenly
+  takes more, like a motor breaking free, is cut back within a few
+  hundredths of a second, and a geared motor's wander is smoothed rather
+  than chased. It stops on a trip, lost
   input, an unplug or a change on the panel, and leaves the output on at
   its last values.
 - A `power` sequence step holds a power the same way, and keeps holding

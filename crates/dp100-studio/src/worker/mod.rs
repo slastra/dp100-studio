@@ -34,6 +34,9 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 /// Measurement poll rate. The device sustains 100 Hz; 20 Hz is plenty for
 /// readouts.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How often a power hold polls at least, so its fast P/V cut catches a
+/// load that suddenly takes more within a couple of hundredths of a second.
+const HOLD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// How often the output record is re-read, to notice changes made on the
 /// front panel. Time-based, since the poll rate changes while recording.
 const OUTPUT_EVERY: Duration = Duration::from_millis(500);
@@ -572,6 +575,11 @@ impl Session {
         Ok(())
     }
 
+    /// Whether power is being held, by itself or by a sequence step.
+    fn holding(&self) -> bool {
+        self.power.is_some() || self.seq.as_ref().is_some_and(|r| r.run.holding())
+    }
+
     /// Ends a running recording, reporting where it went or why it failed.
     fn stop_recording(&mut self, out: &Out) {
         if let Some(r) = self.recorder.take() {
@@ -777,12 +785,17 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
             Wake::Command(_) => continue,
             Wake::Tick => {}
         }
-        next += s.interval;
+        let every = if s.holding() {
+            s.interval.min(HOLD_POLL_INTERVAL)
+        } else {
+            s.interval
+        };
+        next += every;
         let now = Instant::now();
         if next < now {
             // Fell behind (a slow write, a suspended laptop): skip ahead
             // rather than firing a burst of polls.
-            next = now + s.interval;
+            next = now + every;
         }
 
         let m = match dev.basic_info() {
