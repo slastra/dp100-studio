@@ -130,6 +130,18 @@ if [ -n "${SHOT_SCROLL_AFTER:-}" ]; then
     sleep 0.3
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer scroll "$SDY" 0
 fi
+# SHOT_CLICKS_AFTER="X Y;..." clicks after the typing, at absolute positions.
+if [ -n "${SHOT_CLICKS_AFTER:-}" ]; then
+    IFS=';' read -ra CLICKS <<<"$SHOT_CLICKS_AFTER"
+    for c in "${CLICKS[@]}"; do
+        read -r X Y <<<"$c"
+        XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move -10000 -10000
+        XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move "$X" "$Y"
+        sleep 0.3
+        XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer click left
+        sleep "${SHOT_CLICK_DELAY:-1}"
+    done
+fi
 # SHOT_WAIT: seconds to wait before the capture, say for a graph to fill.
 sleep "${SHOT_WAIT:-0}"
 GEOM=()

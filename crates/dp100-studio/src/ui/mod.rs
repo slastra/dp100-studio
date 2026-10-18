@@ -196,6 +196,9 @@ fn load_css() {
 struct Window {
     ctx: Rc<Ctx>,
     title: adw::WindowTitle,
+    /// Turn On, in the header with Record: there is nothing to turn on or
+    /// record without a DP100.
+    power: gtk::Button,
     /// The panel of readings and setpoints, and the graph, with a handle
     /// between them to size the panel.
     paned: gtk::Paned,
@@ -695,6 +698,7 @@ fn build(
     Window {
         ctx,
         title,
+        power,
         paned,
         panel_width: std::cell::Cell::new(panel_width),
         presets_dialog,
@@ -732,16 +736,55 @@ impl Window {
         self.set_banner(None, false);
         self.connected.set(false);
         self.update_header();
-        if let Some(open) = self.ctx.window.visible_dialog() {
-            open.close();
-        }
+        // Nothing asked of a DP100 that is gone outlives it: a Turn On
+        // confirmation, say, describes values a reconnected one may not
+        // have. And what it held is forgotten, not shown as if current.
+        self.close_dialogs();
+        self.readouts.disconnected();
+        self.ctx.live.borrow_mut().presets.clear();
+        self.presets.show_presets(&[]);
         self.stack.set_visible_child_name("status");
     }
 
     /// The header names the app, and says when the DP100 is simulated.
+    /// The header names the app and says when the DP100 is simulated. Its
+    /// buttons, and the pages, work only while one is connected.
     fn update_header(&self) {
         self.title
             .set_subtitle(if self.simulated { "Simulated" } else { "" });
+        let connected = self.connected.get();
+        // Hidden, not greyed: greyed, Turn Off in red would still claim an
+        // output state the app can no longer see.
+        self.power.set_visible(connected);
+        self.log.header_record.set_visible(connected);
+        if let Some(a) = self
+            .ctx
+            .window
+            .lookup_action("page")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            a.set_enabled(connected);
+        }
+    }
+
+    /// Closes every dialog on the window, the ones under the top one too.
+    fn close_dialogs(&self) {
+        // Bounded, in case one ever refuses to close.
+        for _ in 0..8 {
+            match self.ctx.window.visible_dialog() {
+                Some(d) => {
+                    d.force_close();
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Settings that a sequence or a power hold owns while it runs.
+    fn update_locks(&self) {
+        let busy = self.sequences.is_running() || self.readouts.is_holding();
+        self.readouts.set_locked(self.sequences.is_running());
+        self.presets.set_locked(busy);
     }
 
     /// Opens one of the device's pages: a dialog, or for "monitor", the main
@@ -750,9 +793,6 @@ impl Window {
         if !self.connected.get() {
             return;
         }
-        if let Some(open) = self.ctx.window.visible_dialog() {
-            open.close();
-        }
         let dialog: Option<&adw::Dialog> = match name {
             "presets" => Some(&self.presets_dialog),
             "sequences" => Some(&self.sequences_dialog),
@@ -760,6 +800,10 @@ impl Window {
             "device" => Some(self.device_dialog.upcast_ref()),
             _ => None,
         };
+        if dialog.is_some() && self.ctx.window.visible_dialog().as_ref() == dialog {
+            return;
+        }
+        self.close_dialogs();
         if let Some(d) = dialog {
             d.present(Some(&self.ctx.window));
         }
@@ -785,11 +829,13 @@ impl Window {
                 self.readouts.show_power(&st);
                 if !was_holding {
                     self.update_inhibit();
+                    self.update_locks();
                 }
             }
             Event::PowerEnded(why) => {
                 self.readouts.power_ended();
                 self.update_inhibit();
+                self.update_locks();
                 // Ending it yourself needs no word; anything else stopping
                 // the hold does.
                 if !matches!(
@@ -821,6 +867,7 @@ impl Window {
                 Problem::Other(e) => self.status("Can't Open the DP100", e),
             },
             Event::Connected(s) => {
+                self.close_dialogs();
                 self.set_banner(None, false);
                 self.connected.set(true);
                 self.update_header();
@@ -924,17 +971,17 @@ impl Window {
                 self.log.show_stopped(&r);
             }
             Event::Sequence { name, status } => {
-                self.readouts.set_locked(true);
                 let was_running = self.sequences.is_running();
                 self.sequences.show_progress(&name, &status);
                 if !was_running {
                     self.update_inhibit();
+                    self.update_locks();
                 }
             }
             Event::SequenceEnded { name, outcome } => {
-                self.readouts.set_locked(false);
                 self.sequences.show_ended(&name, &outcome);
                 self.update_inhibit();
+                self.update_locks();
                 match &outcome {
                     crate::seq::exec::Outcome::Finished => self.notify(
                         "sequence",

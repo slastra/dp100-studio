@@ -401,6 +401,10 @@ impl Readouts {
         self.controls.refused();
     }
 
+    pub fn disconnected(&self) {
+        self.controls.disconnected();
+    }
+
     pub fn is_holding(&self) -> bool {
         self.controls.is_holding()
     }

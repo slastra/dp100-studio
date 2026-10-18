@@ -153,6 +153,7 @@ pub struct Presets {
     pub recall: adw::PreferencesGroup,
     recall_row: adw::ActionRow,
     recall_menu: gio::Menu,
+    recall_actions: std::cell::RefCell<Option<gio::SimpleActionGroup>>,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
@@ -280,6 +281,7 @@ impl Presets {
             recall,
             recall_row,
             recall_menu,
+            recall_actions: std::cell::RefCell::new(None),
             active: Cell::new(0),
             ctx,
         });
@@ -311,6 +313,7 @@ impl Presets {
             .build();
         actions.add_action_entries([use_action]);
         p.recall.insert_action_group("preset", Some(&actions));
+        p.recall_actions.replace(Some(actions));
         p.fill_recall_menu(&[]);
 
         // Clicking a row edits it, unless it is the one in use.
@@ -360,12 +363,13 @@ impl Presets {
             None => "The DP100 turns the output off as it switches.".to_owned(),
         };
         let d = adw::AlertDialog::new(Some(&format!("Switch to M{n}?")), Some(&body));
-        d.add_responses(&[
-            ("cancel", "Cancel"),
-            ("switch", "Switch"),
-            ("on", "Switch and Turn On"),
-        ]);
-        d.set_response_appearance("on", adw::ResponseAppearance::Suggested);
+        d.add_responses(&[("cancel", "Cancel"), ("switch", "Switch")]);
+        // Turning on always says what it will supply, so only when M{n}'s
+        // values are known.
+        if target.is_some() {
+            d.add_response("on", "Switch and Turn On");
+            d.set_response_appearance("on", adw::ResponseAppearance::Suggested);
+        }
         d.set_default_response(Some("switch"));
         d.set_close_response("cancel");
         let ctx = self.ctx.clone();
@@ -429,15 +433,40 @@ impl Presets {
         d.present(Some(&self.ctx.window));
     }
 
+    /// The stored presets, or none (not read, or disconnected) to show
+    /// dashes rather than what an earlier connection held.
     pub fn show_presets(&self, presets: &[Setpoints]) {
-        for (c, p) in self.rows.iter().zip(presets) {
-            c.volts.set_label(&volts(p.vset_mv));
-            c.amps.set_label(&amps(p.iset_ma));
-            c.ovp.set_label(&volts(p.ovp_mv));
-            c.ocp.set_label(&amps(p.ocp_ma));
+        for (k, c) in self.rows.iter().enumerate() {
+            match presets.get(k) {
+                Some(p) => {
+                    c.volts.set_label(&volts(p.vset_mv));
+                    c.amps.set_label(&amps(p.iset_ma));
+                    c.ovp.set_label(&volts(p.ovp_mv));
+                    c.ocp.set_label(&amps(p.ocp_ma));
+                }
+                None => {
+                    for l in [&c.volts, &c.amps, &c.ovp, &c.ocp] {
+                        l.set_label("--");
+                    }
+                }
+            }
         }
         self.fill_recall_menu(presets);
         self.show_recall();
+    }
+
+    /// While a sequence runs or power is held, switching presets would be
+    /// refused, so Recall's presets grey out.
+    pub fn set_locked(&self, locked: bool) {
+        if let Some(a) = self
+            .recall_actions
+            .borrow()
+            .as_ref()
+            .and_then(|g| g.lookup_action("use"))
+            .and_downcast::<gio::SimpleAction>()
+        {
+            a.set_enabled(!locked);
+        }
     }
 
     /// M1 to M9 with what each holds, then the way to edit them.

@@ -508,6 +508,14 @@ impl Controls {
         self.show_status();
     }
 
+    /// The DP100 went away: no hold is starting or running.
+    pub fn disconnected(&self) {
+        self.starting.set(false);
+        self.holding.set(false);
+        self.power.set(None);
+        self.sample.set(None);
+    }
+
     pub fn is_holding(&self) -> bool {
         self.holding.get()
     }
