@@ -128,6 +128,25 @@ impl Hold {
         }
         self.want = want;
         self.next = None;
+        self.state = HoldState::Settling;
+    }
+
+    /// Puts the setpoints where the hold starts from, if a new hold or a
+    /// new voltage limit needs it. Takes no measurement, so it can run
+    /// before the output comes on.
+    pub fn place(&mut self, now: Instant, t: &mut impl Target) -> Result<HoldState, String> {
+        if !self.placed {
+            let w = self.want;
+            let start = if self.iset > 0.0 {
+                self.iset.min(w.max_current)
+            } else {
+                (w.power / w.max_voltage).min(w.max_current)
+            };
+            self.write(now, w.max_voltage, start, t)?;
+            self.placed = true;
+            self.state = HoldState::Settling;
+        }
+        Ok(self.state)
     }
 
     pub fn tick(
@@ -138,15 +157,7 @@ impl Hold {
     ) -> Result<HoldState, String> {
         let w = self.want;
         if !self.placed {
-            let start = if self.iset > 0.0 {
-                self.iset.min(w.max_current)
-            } else {
-                (w.power / w.max_voltage).min(w.max_current)
-            };
-            self.write(now, w.max_voltage, start, t)?;
-            self.placed = true;
-            self.state = HoldState::Settling;
-            return Ok(self.state);
+            return self.place(now, t);
         }
         if !m.on {
             self.state = HoldState::Idle;

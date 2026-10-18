@@ -271,7 +271,7 @@ impl Run {
                     });
                     // In place before any step after this one runs, so an
                     // output-on next comes on at the hold's setpoints.
-                    hold.tick(now, &Measure::default(), t)?;
+                    hold.place(now, t)?;
                     self.power = Some(hold);
                     self.next();
                 }

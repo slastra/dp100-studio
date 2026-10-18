@@ -34,6 +34,16 @@ DP100_HIL=1 cargo test -p dp100 --test hardware -- --ignored --test-threads=1
 presets and settings (each is restored afterwards). No test turns the output
 on.
 
+One test does turn it on, to check constant power on a real load. It holds
+each power in turn for `DP100_HIL_SECS` (default 8), prints every reading
+and decision, then turns the output off. Wire a load that can take the
+limits you give it:
+
+```sh
+env DP100_HIL_POWER=0.025,0.015 DP100_HIL_VMAX=3.4 DP100_HIL_IMAX=0.010 \
+    cargo test -p dp100-studio hil_holds_power -- --ignored --nocapture
+```
+
 ## Reporting protocol findings
 
 Firmware versions differ. If your unit behaves differently from

@@ -742,7 +742,7 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                 };
                 // The setpoints go in place before the output comes on.
                 let on = s.last.and_then(|m| m.output_on()).unwrap_or(false);
-                let placed = pr.hold.tick(Instant::now(), &Measure::default(), &mut t);
+                let placed = pr.hold.place(Instant::now(), &mut t);
                 let result = placed.and_then(|_| {
                     if turn_on && !on {
                         t.output(true)
@@ -1173,10 +1173,13 @@ mod tests {
         std::thread::sleep(Duration::from_millis(500));
         hold(&w, 0.3, 5.0, 0.1, false);
         let t0 = Instant::now();
-        next(
-            &w,
-            |e| matches!(e, Event::Power(st) if st.state == HoldState::Holding && st.want.power == 0.3),
-        );
+        next(&w, |e| {
+            if let Event::Power(st) = e {
+                assert_ne!(st.state, HoldState::Idle, "the output stayed on");
+                return st.state == HoldState::Holding && st.want.power == 0.3;
+            }
+            false
+        });
         assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
         // 0.3 W into 50 Ω is about 77 mA.
         let i = h.snapshot().live.iset_ma;
@@ -1425,5 +1428,76 @@ duration = "30s"
         next(&w, |e| matches!(e, Event::Released));
         w.send(Command::Reclaim);
         next(&w, |e| matches!(e, Event::Connected(_)));
+    }
+
+    /// Holds power on whatever is wired to a real DP100 and prints what it
+    /// does. Needs `DP100_HIL_POWER=watts[,watts...]`, and optionally
+    /// `DP100_HIL_VMAX`, `DP100_HIL_IMAX` and `DP100_HIL_SECS` per target.
+    #[test]
+    #[ignore = "drives real hardware"]
+    fn hil_holds_power() {
+        let Ok(targets) = std::env::var("DP100_HIL_POWER") else {
+            return;
+        };
+        let env = |k: &str, d: f64| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        let (vmax, imax, secs) = (
+            env("DP100_HIL_VMAX", 3.4),
+            env("DP100_HIL_IMAX", 0.010),
+            env("DP100_HIL_SECS", 8.0),
+        );
+        let w = Worker::spawn(Source::Hardware);
+        next(&w, |e| matches!(e, Event::Connected(_)));
+        next(&w, |e| matches!(e, Event::Sample(_)));
+        let t0 = Instant::now();
+        let mut last = t0;
+        for p in targets.split(',').map(|p| p.parse::<f64>().unwrap()) {
+            println!("-- target {:.3} W, up to {vmax} V and {imax} A", p);
+            w.send(Command::HoldPower {
+                want: PowerTarget {
+                    power: p,
+                    max_voltage: vmax,
+                    max_current: imax,
+                },
+                turn_on: true,
+            });
+            let end = Instant::now() + Duration::from_secs_f64(secs);
+            while Instant::now() < end {
+                let Ok(ev) = w.events.recv_blocking() else {
+                    break;
+                };
+                let t = t0.elapsed().as_secs_f64();
+                match ev {
+                    Event::Sample(s) if s.at.duration_since(last) >= Duration::from_millis(250) => {
+                        last = s.at;
+                        let (v, i) = (s.m.vout_mv as f64 / 1e3, s.m.iout_ma as f64 / 1e3);
+                        println!(
+                            "{t:6.2}s  {v:.3} V  {:5.1} mA  {:6.2} mW  {:?}",
+                            i * 1e3,
+                            v * i * 1e3,
+                            s.m.mode
+                        );
+                    }
+                    Event::Output(o) => println!("{t:6.2}s  set {} mV {} mA", o.vset_mv, o.iset_ma),
+                    Event::Power(st) => {
+                        println!("{t:6.2}s  {:?} at {:.2} mW", st.state, st.power * 1e3)
+                    }
+                    Event::PowerEnded(why) => {
+                        println!("{t:6.2}s  ended: {why}");
+                        return;
+                    }
+                    Event::Done(Err(e)) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+        }
+        w.send(Command::Do(Action::SetOutput(false)));
+        println!("{}", power_ended(&w));
+        next(&w, |e| matches!(e, Event::Done(_)));
+        println!("output off");
     }
 }
