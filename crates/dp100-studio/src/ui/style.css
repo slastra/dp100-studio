@@ -14,9 +14,9 @@
   font-feature-settings: "tnum";
 }
 
-/* The main readings, read from across the bench. */
+/* The main readings, read from across the bench; their size is set to
+   fill the panel's width. */
 .reading {
-  font-size: 3.2em;
   font-weight: 300;
 }
 

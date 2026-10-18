@@ -120,9 +120,9 @@ impl Controls {
             .icon_name("system-shutdown-symbolic")
             .label("Turn On")
             .build();
+        // In the header bar, beside Record.
         let toggle = gtk::Button::builder()
             .child(&toggle_content)
-            .css_classes(["pill"])
             .valign(gtk::Align::Center)
             .tooltip_text("Turn the Output On")
             .build();

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use dp100::{BasicInfo, Fault, Mode, Setpoints};
+use gtk::{glib, pango};
 
 use super::controls::Controls;
 use super::ctx::{amps, volts};
@@ -37,6 +38,7 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
 /// line saying what it is being held to.
 struct Channel {
     value: gtk::Label,
+    unit: gtk::Label,
     bar: gtk::ProgressBar,
     note: gtk::Label,
 }
@@ -68,11 +70,57 @@ impl Channel {
         b.append(&bar);
         let note = label("", &["dim-label", "numeric"]);
         b.append(&note);
-        (Self { value, bar, note }, b)
+        (
+            Self {
+                value,
+                unit,
+                bar,
+                note,
+            },
+            b,
+        )
     }
 }
 
 /// A small secondary figure for the panel footer.
+/// Sizes the main readings to fill the panel's width, as a bench meter's
+/// digits fill its display: the widest reading, "00.000", spans the width
+/// left beside its unit. Checked each frame, and only redone when the
+/// width changes, so dragging the panel's handle resizes them as it goes.
+fn fit_readings(channels: &gtk::Box, readings: [&Channel; 2]) {
+    let values = readings.map(|c| c.value.clone());
+    let unit = readings[0].unit.clone();
+    let last = Cell::new(0);
+    channels.add_tick_callback(move |w, _| {
+        let width = w.width();
+        if width > 0 && width != last.get() {
+            last.set(width);
+            let room = f64::from((width - unit.width() - 12).max(60));
+            // Measured at 100 px in the readings' own font, tabular figures.
+            let ctx = values[0].pango_context();
+            let mut font = ctx.font_description().unwrap_or_default();
+            font.set_absolute_size(100.0 * f64::from(pango::SCALE));
+            font.set_weight(pango::Weight::Light);
+            let layout = pango::Layout::new(&ctx);
+            layout.set_font_description(Some(&font));
+            let tnum = pango::AttrList::new();
+            tnum.insert(pango::AttrFontFeatures::new("tnum"));
+            layout.set_attributes(Some(&tnum));
+            layout.set_text("00.000");
+            let measured = f64::from(layout.pixel_size().0.max(1));
+            let px = (100.0 * room / measured).clamp(32.0, 140.0);
+            let attrs = pango::AttrList::new();
+            attrs.insert(pango::AttrSize::new_size_absolute(
+                (px * f64::from(pango::SCALE)) as i32,
+            ));
+            for v in &values {
+                v.set_attributes(Some(&attrs));
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
 fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
     let b = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -213,8 +261,10 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
     value
 }
 
-/// The narrowest the panel of readouts and setpoints goes beside the graph.
+/// The narrowest and widest the panel of readouts and setpoints goes beside
+/// the graph.
 pub const PANEL_WIDTH: i32 = 340;
+pub const PANEL_MAX_WIDTH: i32 = 480;
 
 pub struct Readouts {
     /// The panel's contents: lamps and readings, setpoints, details.
@@ -250,8 +300,8 @@ impl Readouts {
             .build();
 
         // --- the instrument panel, laid out for a column ---
-        let panel = Panel::new(&LAMPS, Some(controls.toggle.upcast_ref()));
-        panel.compact(Some(controls.toggle.upcast_ref()));
+        let panel = Panel::new(&LAMPS, None);
+        panel.compact(None);
         // The mode and output lamps over the four trips, as two rows.
         panel.lamps_per_line(4);
 
@@ -264,6 +314,7 @@ impl Readouts {
         let (amps, b) = Channel::new("CURRENT", "A", "amp");
         channels.append(&b);
         panel.body.append(&channels);
+        fit_readings(&channels, [&volts, &amps]);
 
         let footer = gtk::Box::builder().spacing(12).homogeneous(true).build();
         let (power, b) = stat("POWER");

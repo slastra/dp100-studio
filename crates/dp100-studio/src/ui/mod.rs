@@ -482,13 +482,18 @@ fn install_breakpoint(w: &Rc<Window>) {
     bp.connect_unapply(move |_| ui.paned.set_position(ui.panel_width.get()));
     w.ctx.window.add_breakpoint(bp);
 
-    // The panel's width, while side by side, is remembered.
+    // The panel's width, while side by side, is kept to its range and
+    // remembered. A paned has a minimum for each side but no maximum.
     let ui = Rc::downgrade(w);
     w.paned.connect_position_notify(move |p| {
         if let Some(ui) = ui.upgrade()
             && p.orientation() == gtk::Orientation::Horizontal
             && p.position() > 0
         {
+            if p.position() > readouts::PANEL_MAX_WIDTH {
+                p.set_position(readouts::PANEL_MAX_WIDTH);
+                return;
+            }
             ui.panel_width.set(p.position());
         }
     });
@@ -608,12 +613,14 @@ fn build(
         .build();
 
     let controls = Controls::new(ctx.clone());
+    let power = controls.toggle.clone();
     let readouts = Readouts::new(controls);
     let presets = Presets::new(ctx.clone());
     let device = Device::new(ctx.clone(), simulated);
     let log = Log::new(ctx.clone());
     let sequences = Sequences::new(ctx.clone());
     header.pack_end(&log.header_record);
+    header.pack_end(&power);
 
     // The panel: readings and setpoints, a running sequence, the preset.
     readouts.add_under_readings(&sequences.card);
@@ -623,7 +630,11 @@ fn build(
         .width_request(readouts::PANEL_WIDTH)
         .child(&readouts.pane)
         .build();
-    let panel_width = saved.as_ref().and_then(|s| s.panel).unwrap_or(400);
+    let panel_width = saved
+        .as_ref()
+        .and_then(|s| s.panel)
+        .unwrap_or(400)
+        .clamp(readouts::PANEL_WIDTH, readouts::PANEL_MAX_WIDTH);
     let paned = gtk::Paned::builder()
         .start_child(&panel)
         .end_child(&readouts.graph_area)
