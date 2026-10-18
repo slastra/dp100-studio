@@ -1,8 +1,8 @@
 /* DP100 Studio
  *
  * Stock libadwaita throughout. What is left here is what libadwaita has no
- * class for: tabular figures, the size of the main readings, and the
- * annunciator lamps' LEDs.
+ * class for: tabular figures and the annunciator lamps' LEDs. (The main
+ * readings are drawn, in segments.rs.)
  */
 
 @define-color dp_volt #3584e4;
@@ -12,12 +12,6 @@
 
 .numeric {
   font-feature-settings: "tnum";
-}
-
-/* The main readings, read from across the bench; their size is set to
-   fill the panel's width. */
-.reading {
-  font-weight: 300;
 }
 
 /* Annunciator lamps: an LED and a printed legend. Unlit, the LED is a dim

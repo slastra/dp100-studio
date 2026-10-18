@@ -8,6 +8,7 @@ mod page;
 mod panel;
 mod presets;
 mod readouts;
+mod segments;
 mod sequences;
 
 use std::cell::RefCell;

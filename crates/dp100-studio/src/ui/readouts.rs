@@ -12,13 +12,14 @@ use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use dp100::{BasicInfo, Fault, Mode, Setpoints};
-use gtk::{glib, pango};
+use gtk::gdk;
 
 use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
 use super::panel::{Panel, Tone};
+use super::segments::SevenSeg;
 use crate::seq::power::HoldState;
 use crate::worker::PowerStatus;
 
@@ -37,42 +38,51 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
 /// One big channel readout: caption, value and unit, a headroom bar, and a
 /// line saying what it is being held to.
 struct Channel {
-    value: gtk::Label,
-    unit: gtk::Label,
+    display: SevenSeg,
+    unit: &'static str,
     bar: gtk::ProgressBar,
     note: gtk::Label,
 }
 
 impl Channel {
-    fn new(caption: &str, unit: &str, class: &str) -> (Self, gtk::Box) {
+    /// A reading: its name with its setpoint opposite, the digits, and a
+    /// bar of how much of the setpoint is in use.
+    fn new(caption: &str, unit: &'static str, color: &str) -> (Self, gtk::Box) {
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
+            .spacing(6)
             .hexpand(true)
-            .css_classes([class])
             .build();
-        b.append(&label(caption, &["caption-heading"]));
-        let line = gtk::Box::builder().spacing(6).build();
-        let value = gtk::Label::builder()
-            .label("--")
-            .css_classes(["reading", "numeric"])
-            .valign(gtk::Align::BaselineFill)
-            .build();
-        let unit = gtk::Label::builder()
-            .label(unit)
-            .css_classes(["title-2", "dim-label"])
-            .valign(gtk::Align::BaselineFill)
-            .build();
-        line.append(&value);
-        line.append(&unit);
+        let head = gtk::Box::builder().spacing(6).build();
+        head.append(
+            &gtk::Label::builder()
+                .label(caption)
+                .css_classes(["caption-heading"])
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
+        let note = label("", &["caption", "dim-label", "numeric"]);
+        note.set_xalign(1.0);
+        head.append(&note);
+        b.append(&head);
+
+        let line = gtk::Box::builder().spacing(10).build();
+        let display = SevenSeg::new(2, 3, gdk::RGBA::parse(color).ok());
+        line.append(&display);
+        line.append(
+            &gtk::Label::builder()
+                .label(unit)
+                .css_classes(["title-2", "dim-label"])
+                .valign(gtk::Align::End)
+                .build(),
+        );
         b.append(&line);
-        let bar = gtk::ProgressBar::builder().css_classes([class]).build();
+        let bar = gtk::ProgressBar::new();
         b.append(&bar);
-        let note = label("", &["dim-label", "numeric"]);
-        b.append(&note);
         (
             Self {
-                value,
+                display,
                 unit,
                 bar,
                 note,
@@ -80,45 +90,12 @@ impl Channel {
             b,
         )
     }
-}
 
-/// A small secondary figure for the panel footer.
-/// Sizes the main readings to fill the panel's width, as a bench meter's
-/// digits fill its display: the widest reading, "00.000", spans the width
-/// left beside its unit. Checked each frame, and only redone when the
-/// width changes, so dragging the panel's handle resizes them as it goes.
-fn fit_readings(channels: &gtk::Box, readings: [&Channel; 2]) {
-    let values = readings.map(|c| c.value.clone());
-    let unit = readings[0].unit.clone();
-    let last = Cell::new(0);
-    channels.add_tick_callback(move |w, _| {
-        let width = w.width();
-        if width > 0 && width != last.get() {
-            last.set(width);
-            let room = f64::from((width - unit.width() - 12).max(60));
-            // Measured at 100 px in the readings' own font, tabular figures.
-            let ctx = values[0].pango_context();
-            let mut font = ctx.font_description().unwrap_or_default();
-            font.set_absolute_size(100.0 * f64::from(pango::SCALE));
-            font.set_weight(pango::Weight::Light);
-            let layout = pango::Layout::new(&ctx);
-            layout.set_font_description(Some(&font));
-            let tnum = pango::AttrList::new();
-            tnum.insert(pango::AttrFontFeatures::new("tnum"));
-            layout.set_attributes(Some(&tnum));
-            layout.set_text("00.000");
-            let measured = f64::from(layout.pixel_size().0.max(1));
-            let px = (100.0 * room / measured).clamp(32.0, 140.0);
-            let attrs = pango::AttrList::new();
-            attrs.insert(pango::AttrSize::new_size_absolute(
-                (px * f64::from(pango::SCALE)) as i32,
-            ));
-            for v in &values {
-                v.set_attributes(Some(&attrs));
-            }
-        }
-        glib::ControlFlow::Continue
-    });
+    fn show(&self, milli: u16) {
+        let v = f64::from(milli) / 1000.0;
+        let name = if self.unit == "V" { "volts" } else { "amps" };
+        self.display.set_value(Some(v), &format!("{v:.3} {name}"));
+    }
 }
 
 fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
@@ -314,12 +291,12 @@ impl Readouts {
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
             .build();
-        let (volts, b) = Channel::new("VOLTAGE", "V", "volt");
+        // The graph's lane colours, so a reading and its trace match.
+        let (volts, b) = Channel::new("VOLTAGE", "V", "#3584e4");
         channels.append(&b);
-        let (amps, b) = Channel::new("CURRENT", "A", "amp");
+        let (amps, b) = Channel::new("CURRENT", "A", "#ff7800");
         channels.append(&b);
         panel.body.append(&channels);
-        fit_readings(&channels, [&volts, &amps]);
 
         let footer = gtk::Box::builder().spacing(12).homogeneous(true).build();
         let (power, b) = stat("POWER");
@@ -441,12 +418,8 @@ impl Readouts {
         self.last_labels.set(Some(at));
         self.controls.show_sample(m);
 
-        self.volts
-            .value
-            .set_label(&format!("{:.3}", f64::from(m.vout_mv) / 1000.0));
-        self.amps
-            .value
-            .set_label(&format!("{:.3}", f64::from(m.iout_ma) / 1000.0));
+        self.volts.show(m.vout_mv);
+        self.amps.show(m.iout_ma);
         self.power
             .set_label(&format!("{:.3}\u{202f}W", f64::from(m.power_mw()) / 1000.0));
         self.vin.set_label(&volts(m.vin_mv));
