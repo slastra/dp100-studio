@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 
 use super::ctx::Ctx;
 use super::log::clock;
@@ -140,6 +140,9 @@ fn new_step(kind: &str) -> Option<Step> {
     })
 }
 
+/// What one of a step's menu items does.
+type StepAction = Box<dyn Fn(&Rc<Sequences>)>;
+
 pub struct Sequences {
     /// The editor, for its dialog: problems, steps and settings.
     pub root: adw::PreferencesPage,
@@ -251,15 +254,16 @@ impl Sequences {
             .build();
         let buttons = gtk::Box::builder()
             .spacing(6)
-            .halign(gtk::Align::End)
             .margin_top(8)
             .margin_bottom(8)
             .margin_start(12)
             .margin_end(12)
             .build();
+        // Run first; the editing and the file menu at the far end.
+        buttons.append(&run);
+        buttons.append(&gtk::Box::builder().hexpand(true).build());
         buttons.append(&edit_button);
         buttons.append(&more);
-        buttons.append(&run);
         let buttons_row = gtk::ListBoxRow::builder()
             .activatable(false)
             .selectable(false)
@@ -865,46 +869,47 @@ impl Sequences {
                 .build(),
         );
 
-        let tools = gtk::Box::builder()
-            .spacing(2)
+        // Moving and removing, from a menu at the row's end; dragging the
+        // handle at its start moves it too.
+        let menu = gio::Menu::new();
+        menu.append(Some("Move _Up"), Some("step.up"));
+        menu.append(Some("Move _Down"), Some("step.down"));
+        let gone = gio::Menu::new();
+        gone.append(Some("_Remove"), Some("step.remove"));
+        menu.append_section(None, &gone);
+        let tools = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .menu_model(&menu)
+            .css_classes(["flat", "circular"])
             .valign(gtk::Align::Center)
+            .tooltip_text("Move or Remove")
             .build();
-        let tool = |icon: &str, tip: &str, enabled: bool| {
-            let b = gtk::Button::builder()
-                .icon_name(icon)
-                .css_classes(["flat", "circular"])
-                .tooltip_text(tip)
-                .sensitive(enabled)
-                .build();
-            // Icon-only, so it needs a name of its own for screen readers.
-            b.update_property(&[gtk::accessible::Property::Label(&format!(
-                "{tip}: step {}",
-                k + 1
-            ))]);
-            tools.append(&b);
-            b
+        tools.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Move or remove step {}",
+            k + 1
+        ))]);
+        let actions = gio::SimpleActionGroup::new();
+        let step_action = |name: &str, enabled: bool, f: StepAction| {
+            let w = Rc::downgrade(self);
+            let a = gio::SimpleAction::new(name, None);
+            a.set_enabled(enabled);
+            a.connect_activate(move |_, _| {
+                if let Some(p) = w.upgrade() {
+                    f(&p);
+                }
+            });
+            actions.add_action(&a);
         };
-        let up = tool("go-up-symbolic", "Move Up", k > 0);
-        let down = tool("go-down-symbolic", "Move Down", k + 1 < n);
-        let remove = tool("user-trash-symbolic", "Remove Step", true);
-        let w = Rc::downgrade(self);
-        up.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.move_step(k, k - 1);
-            }
-        });
-        let w = Rc::downgrade(self);
-        down.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.move_step(k, k + 1);
-            }
-        });
-        let w = Rc::downgrade(self);
-        remove.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.remove_step(k);
-            }
-        });
+        step_action("up", k > 0, Box::new(move |p| p.move_step(k, k - 1)));
+        step_action("down", k + 1 < n, Box::new(move |p| p.move_step(k, k + 1)));
+        step_action("remove", true, Box::new(move |p| p.remove_step(k)));
+        let handle = gtk::Image::builder()
+            .icon_name("list-drag-handle-symbolic")
+            .css_classes(["dim-label"])
+            .margin_end(6)
+            .tooltip_text("Drag to Move")
+            .build();
+        prefix.prepend(&handle);
 
         // A repeat's end has nothing to change.
         if matches!(step, Step::End) {
@@ -912,6 +917,8 @@ impl Sequences {
             row.set_title(&title);
             row.add_prefix(&prefix);
             row.add_suffix(&tools);
+            row.insert_action_group("step", Some(&actions));
+            self.draggable(row.upcast_ref(), &handle, k);
             return row.upcast();
         }
         let row = adw::ExpanderRow::builder().use_markup(false).build();
@@ -923,6 +930,8 @@ impl Sequences {
         }
         row.add_prefix(&prefix);
         row.add_suffix(&tools);
+        row.insert_action_group("step", Some(&actions));
+        self.draggable(row.upcast_ref(), &handle, k);
         let w = Rc::downgrade(self);
         editor::expand(&row, step, move |new| {
             if let Some(p) = w.upgrade() {
@@ -1121,14 +1130,48 @@ impl Sequences {
         });
     }
 
-    /// Swaps two neighbouring steps; an open one stays open as it moves.
+    /// Moves a step to `to`, the others closing up around it; an open one
+    /// stays open where it ends up.
     fn move_step(self: &Rc<Self>, from: usize, to: usize) {
-        match self.expanded.get() {
-            Some(k) if k == from => self.expanded.set(Some(to)),
-            Some(k) if k == to => self.expanded.set(Some(from)),
-            _ => {}
+        if from == to {
+            return;
         }
-        self.edit(|s| s.steps.swap(from, to));
+        if let Some(k) = self.expanded.get() {
+            self.expanded.set(Some(moved(k, from, to)));
+        }
+        self.edit(|s| {
+            let step = s.steps.remove(from);
+            s.steps.insert(to, step);
+        });
+    }
+
+    /// Lets step `k`'s row be dragged by `handle` and dropped onto another
+    /// step's row, which moves it there.
+    fn draggable(self: &Rc<Self>, row: &gtk::Widget, handle: &gtk::Image, k: usize) {
+        let source = gtk::DragSource::builder()
+            .actions(gdk::DragAction::MOVE)
+            .content(&gdk::ContentProvider::for_value(&(k as u32).to_value()))
+            .build();
+        let r = row.downgrade();
+        source.connect_drag_begin(move |src, _| {
+            if let Some(r) = r.upgrade() {
+                src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&r))), 0, 0);
+            }
+        });
+        handle.add_controller(source);
+
+        let target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+        let w = Rc::downgrade(self);
+        target.connect_drop(move |_, value, _, _| {
+            let (Some(p), Ok(from)) = (w.upgrade(), value.get::<u32>()) else {
+                return false;
+            };
+            // After the drop finishes: moving rebuilds the rows, this one
+            // included.
+            glib::idle_add_local_once(move || p.move_step(from as usize, k));
+            true
+        });
+        row.add_controller(target);
     }
 
     fn remove_step(self: &Rc<Self>, k: usize) {
@@ -1303,6 +1346,19 @@ fn find_marked(row: &impl IsA<gtk::Widget>, class: &str) -> Option<gtk::Widget> 
     None
 }
 
+/// Where the step at `k` ends up when the one at `from` moves to `to`.
+fn moved(k: usize, from: usize, to: usize) -> usize {
+    if k == from {
+        to
+    } else if from < k && k <= to {
+        k - 1
+    } else if to <= k && k < from {
+        k + 1
+    } else {
+        k
+    }
+}
+
 fn matching_end(steps: &[Step], start: usize) -> Option<usize> {
     let mut depth = 0;
     for (k, s) in steps.iter().enumerate().skip(start) {
@@ -1340,6 +1396,22 @@ fn matching_repeat(steps: &[Step], end: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_step_takes_its_place_and_the_rest_close_up() {
+        // Five steps, a b c d e; c (2) is dragged onto a (0): c a b d e.
+        let order = |from, to| {
+            let mut out = ['?'; 5];
+            for (k, c) in "abcde".chars().enumerate() {
+                out[moved(k, from, to)] = c;
+            }
+            out.iter().collect::<String>()
+        };
+        assert_eq!(order(2, 0), "cabde");
+        assert_eq!(order(0, 3), "bcdae");
+        assert_eq!(order(4, 1), "aebcd");
+        assert_eq!(order(1, 1), "abcde");
+    }
 
     #[test]
     fn repeat_brackets_pair_up() {
