@@ -136,7 +136,7 @@ const LAMPS: [(&str, &str, Tone); 3] = [
 
 impl Device {
     pub fn new(ctx: Rc<Ctx>, simulated: bool) -> Rc<Self> {
-        let root = Page::wide();
+        let root = Page::new();
 
         // --- the unit, as a panel ---
         let release = gtk::Button::builder()

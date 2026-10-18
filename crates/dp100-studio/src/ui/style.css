@@ -237,6 +237,12 @@ button.sequence-chip:hover {
 /* ---- presets ----------------------------------------------------------- */
 
 /* The memories as a table, like the M1-M9 slots on a supply's front panel. */
+/* The step open in the editor beside the list. */
+row.step-row.editing {
+  box-shadow: inset 3px 0 0 @accent_bg_color;
+  background-color: alpha(@accent_bg_color, 0.10);
+}
+
 row.preset-row.active {
   box-shadow: inset 3px 0 0 @accent_bg_color;
   background-color: alpha(@accent_bg_color, 0.10);

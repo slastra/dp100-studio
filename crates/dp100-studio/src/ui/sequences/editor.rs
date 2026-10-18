@@ -18,6 +18,13 @@ fn spin(title: &str, min: f64, max: f64, step: f64, digits: u32, value: f64) -> 
     r
 }
 
+/// A spin row's value as it shows, to its digits: a spin button steps in
+/// binary floats, so ten 0.001 steps from 0.05 store 0.051000000000000004.
+pub(super) fn shown(r: &adw::SpinRow) -> f64 {
+    let k = 10f64.powi(r.digits() as i32);
+    (r.value() * k).round() / k
+}
+
 fn combo(title: &str, items: &[&str], selected: usize) -> adw::ComboRow {
     adw::ComboRow::builder()
         .title(title)
@@ -113,8 +120,8 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
             (
                 Box::new(move || {
                     Ok(Step::Set {
-                        voltage: use_v.is_active().then(|| v.value()),
-                        current: use_i.is_active().then(|| i.value()),
+                        voltage: use_v.is_active().then(|| shown(&v)),
+                        current: use_i.is_active().then(|| shown(&i)),
                     })
                 }),
                 Vec::new(),
@@ -203,14 +210,14 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                         } else {
                             RampTarget::Voltage
                         },
-                        to: v.value(),
+                        to: shown(&v),
                         duration: dd.required()?,
                         interval: if use_step.is_active() {
                             None
                         } else {
                             ii.read()?
                         },
-                        step: use_step.is_active().then(|| size.value()),
+                        step: use_step.is_active().then(|| shown(&size)),
                     })
                 }),
                 vec![d, iv],
@@ -272,7 +279,7 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                     Ok(Step::WaitUntil {
                         metric: Metric::ALL[m.selected() as usize % Metric::ALL.len()],
                         op: Cmp::ALL[o.selected() as usize % Cmp::ALL.len()],
-                        value: v.value(),
+                        value: shown(&v),
                         hold: hh.read()?,
                         timeout: tt.read()?,
                         on_timeout: if ot.selected() == 1 {
@@ -317,9 +324,9 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
             (
                 Box::new(move || {
                     Ok(Step::Power {
-                        power: p.value(),
-                        max_voltage: v.value(),
-                        max_current: use_i.is_active().then(|| i.value()),
+                        power: shown(&p),
+                        max_voltage: shown(&v),
+                        max_current: use_i.is_active().then(|| shown(&i)),
                     })
                 }),
                 Vec::new(),
@@ -430,6 +437,74 @@ pub fn open(
     } else if let Some(row) = first_focusable(&group) {
         row.grab_focus();
     }
+}
+
+/// The editor in place, beside the steps on a wide window: the step's
+/// fields under its title, and Save and Revert (or Discard, for a step that
+/// was only just added) in the header. `save` gets the edited step;
+/// `back_out` runs on Revert or Discard.
+pub fn inline(
+    title: &str,
+    step: &Step,
+    is_new: bool,
+    save: impl Fn(Step) + 'static,
+    back_out: impl Fn() + 'static,
+) -> adw::PreferencesGroup {
+    let save_button = gtk::Button::builder()
+        .label("Save")
+        .css_classes(["suggested-action"])
+        .valign(gtk::Align::Center)
+        .build();
+    let back_button = gtk::Button::builder()
+        .label(if is_new { "Discard" } else { "Revert" })
+        .css_classes(["flat"])
+        .valign(gtk::Align::Center)
+        .tooltip_text(if is_new {
+            "Remove the New Step"
+        } else {
+            "Put Back What Is Saved"
+        })
+        .build();
+    let bar = gtk::Box::builder().spacing(6).build();
+    bar.append(&back_button);
+    bar.append(&save_button);
+    let group = adw::PreferencesGroup::builder()
+        .title(title)
+        .header_suffix(&bar)
+        .css_classes(["step-editor"])
+        .build();
+    let (read, durations) = fields(step, &group);
+
+    // Mark bad durations as they are typed; Save waits for all to parse.
+    let check = {
+        let durations = durations.clone();
+        let save_button = save_button.clone();
+        move || {
+            let mut ok = true;
+            for d in &durations {
+                if d.read().is_err() {
+                    d.row.add_css_class("error");
+                    ok = false;
+                } else {
+                    d.row.remove_css_class("error");
+                }
+            }
+            save_button.set_sensitive(ok);
+        }
+    };
+    for d in &durations {
+        let check = check.clone();
+        d.row.connect_changed(move |_| check());
+    }
+    check();
+
+    save_button.connect_clicked(move |_| {
+        if let Ok(step) = read() {
+            save(step);
+        }
+    });
+    back_button.connect_clicked(move |_| back_out());
+    group
 }
 
 fn first_focusable(group: &adw::PreferencesGroup) -> Option<gtk::Widget> {

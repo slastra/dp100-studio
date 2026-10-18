@@ -149,13 +149,15 @@ pub struct Presets {
     rows: Vec<Row>,
     /// The trip columns, which a narrow window leaves out.
     trip_columns: Vec<gtk::Widget>,
+    /// The current limit's heading, shortened on a narrow window.
+    limit_caption: gtk::Label,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
 
 impl Presets {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = Page::wide();
+        let root = Page::new();
 
         // --- the panel: a memory lamp per preset, the active one lit ---
         let lamps: Vec<(String, String)> = (1..=9)
@@ -219,12 +221,13 @@ impl Presets {
                 .build()
         };
         let (h_ovp, h_ocp) = (caption("OVP"), caption("OCP"));
+        let limit_caption = caption("CURRENT LIMIT");
         let header = line(
             &cols,
             caption("MEMORY").upcast_ref(),
             &[
                 caption("VOLTAGE").upcast_ref(),
-                caption("CURRENT LIMIT").upcast_ref(),
+                limit_caption.upcast_ref(),
                 h_ovp.upcast_ref(),
                 h_ocp.upcast_ref(),
             ],
@@ -255,6 +258,7 @@ impl Presets {
             figures,
             rows,
             trip_columns,
+            limit_caption,
             active: Cell::new(0),
             ctx,
         });
@@ -292,6 +296,8 @@ impl Presets {
         for w in &self.trip_columns {
             bp.add_setter(w, "visible", Some(&false.to_value()));
         }
+        // The columns are as wide as the widest heading.
+        bp.add_setter(&self.limit_caption, "label", Some(&"LIMIT".to_value()));
     }
 
     fn use_preset(&self, n: u8) {

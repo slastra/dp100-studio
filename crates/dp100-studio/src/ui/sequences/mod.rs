@@ -25,7 +25,7 @@ use gtk::{gio, glib};
 
 use super::ctx::Ctx;
 use super::log::clock;
-use super::page::Page;
+use super::page::{Columns, Page};
 use super::panel::{Panel, Tone, figure, footer};
 use crate::seq::exec::{Outcome, Status};
 use crate::seq::schema::{Cmp, Dur, Metric, OnAbort, OnTimeout, RampTarget, Sequence, Step};
@@ -163,6 +163,15 @@ struct Figure {
 
 pub struct Sequences {
     pub root: Page,
+    columns: Columns,
+    /// Beside the steps on a wide window: the step being edited, or a
+    /// note saying to pick one.
+    editor_slot: gtk::Box,
+    /// The step in the editor beside the list: where it is, what it held
+    /// when opened, and whether it was only just added.
+    editing: RefCell<Option<(usize, Step, bool)>>,
+    /// The window is narrow, so steps open in a dialog instead.
+    narrow: Cell<bool>,
     panel: Panel,
     run: gtk::Button,
     run_content: adw::ButtonContent,
@@ -303,6 +312,9 @@ impl Sequences {
         let pg = adw::PreferencesGroup::new();
         pg.add(&panel.root);
         root.add(&pg);
+        // The steps on the left; the step being edited and the sequence's
+        // settings on the right.
+        let columns = Columns::new(&root);
 
         // --- steps ---
         let add_menu = gio::Menu::new();
@@ -334,7 +346,11 @@ impl Sequences {
             .description("Run top to bottom; click a step to change it")
             .header_suffix(&add)
             .build();
-        root.add(&steps_group);
+        columns.left.append(&steps_group);
+        let editor_slot = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        columns.right.append(&editor_slot);
 
         // --- settings ---
         let sg = adw::PreferencesGroup::builder().title("Settings").build();
@@ -367,7 +383,7 @@ impl Sequences {
         sg.add(&name);
         sg.add(&on_abort);
         sg.add(&limits);
-        root.add(&sg);
+        columns.right.append(&sg);
 
         let delete = gtk::Button::builder()
             .label("Delete Sequence")
@@ -376,7 +392,7 @@ impl Sequences {
             .build();
         let dg = adw::PreferencesGroup::new();
         dg.add(&delete);
-        root.add(&dg);
+        columns.right.append(&dg);
 
         let editors: Vec<gtk::Widget> = vec![
             picker.clone().upcast(),
@@ -389,6 +405,10 @@ impl Sequences {
 
         let p = Rc::new(Self {
             root,
+            columns,
+            editor_slot,
+            editing: RefCell::new(None),
+            narrow: Cell::new(false),
             panel,
             run,
             run_content,
@@ -472,7 +492,7 @@ impl Sequences {
         let limits_changed = move || {
             if let Some(p) = w.upgrade() {
                 let on = p.limits.enables_expansion();
-                let (v, i) = (p.max_v.value(), p.max_i.value());
+                let (v, i) = (editor::shown(&p.max_v), editor::shown(&p.max_i));
                 p.edit(|s| {
                     s.limits.max_voltage = on.then_some(v);
                     s.limits.max_current = on.then_some(i);
@@ -500,6 +520,7 @@ impl Sequences {
 
         seed(&sequences_dir());
         p.reload(None);
+        p.close_editor();
         p
     }
 
@@ -507,8 +528,26 @@ impl Sequences {
         self.running.get()
     }
 
-    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+    pub fn narrow_layout(self: &Rc<Self>, bp: &adw::Breakpoint) {
         self.panel.narrow_layout(bp, Some(self.run.upcast_ref()));
+        self.columns.narrow_layout(bp);
+        // Stacked, the editor would sit far below the step it edits, so a
+        // narrow window edits steps in a dialog.
+        let w = Rc::downgrade(self);
+        bp.connect_apply(move |_| {
+            if let Some(p) = w.upgrade() {
+                p.narrow.set(true);
+                p.close_editor();
+                p.editor_slot.set_visible(false);
+            }
+        });
+        let w = Rc::downgrade(self);
+        bp.connect_unapply(move |_| {
+            if let Some(p) = w.upgrade() {
+                p.narrow.set(false);
+                p.editor_slot.set_visible(true);
+            }
+        });
     }
 
     // ---- files ----
@@ -699,10 +738,89 @@ impl Sequences {
             self.steps_group.add(&row);
             rows.push(row.upcast());
         }
+        // The editor beside the list stays open while its step does.
+        let stale = self
+            .editing
+            .borrow()
+            .as_ref()
+            .is_some_and(|(k, st, _)| steps.get(*k) != Some(st));
         drop(doc);
         *self.step_rows.borrow_mut() = rows;
+        if stale {
+            self.close_editor();
+        } else {
+            self.mark_editing();
+        }
         self.mark_current();
         self.refresh_checks();
+    }
+
+    /// Shows the note in place of a step editor.
+    fn close_editor(&self) {
+        self.editing.replace(None);
+        while let Some(c) = self.editor_slot.first_child() {
+            self.editor_slot.remove(&c);
+        }
+        let g = adw::PreferencesGroup::builder().title("Step").build();
+        g.add(
+            &adw::ActionRow::builder()
+                .title("Click a step to change it here")
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        self.editor_slot.append(&g);
+        self.mark_editing();
+    }
+
+    /// Opens step `k` in the editor beside the list.
+    fn open_editor(self: &Rc<Self>, k: usize, step: Step, is_new: bool) {
+        let (legend, _) = chip(&step);
+        let title = if is_new {
+            format!("New {} Step", titlecase(legend))
+        } else {
+            format!("Step {} · {}", k + 1, titlecase(legend))
+        };
+        let w = Rc::downgrade(self);
+        let save = move |new: Step| {
+            if let Some(p) = w.upgrade() {
+                // Recorded first, so the refresh that follows the save
+                // keeps the editor open on what was saved.
+                p.editing.replace(Some((k, new.clone(), false)));
+                p.edit(|s| s.steps[k] = new.clone());
+                p.open_editor(k, new, false);
+            }
+        };
+        let w = Rc::downgrade(self);
+        let saved = step.clone();
+        let back_out = move || {
+            if let Some(p) = w.upgrade() {
+                if is_new {
+                    p.close_editor();
+                    p.discard_new(k);
+                } else {
+                    p.open_editor(k, saved.clone(), false);
+                }
+            }
+        };
+        let group = editor::inline(&title, &step, is_new, save, back_out);
+        self.editing.replace(Some((k, step, is_new)));
+        while let Some(c) = self.editor_slot.first_child() {
+            self.editor_slot.remove(&c);
+        }
+        self.editor_slot.append(&group);
+        self.mark_editing();
+    }
+
+    /// Highlights the row of the step in the editor.
+    fn mark_editing(&self) {
+        let k = self.editing.borrow().as_ref().map(|(k, _, _)| *k);
+        for (i, r) in self.step_rows.borrow().iter().enumerate() {
+            if Some(i) == k {
+                r.add_css_class("editing");
+            } else {
+                r.remove_css_class("editing");
+            }
+        }
     }
 
     fn step_row(
@@ -1030,6 +1148,10 @@ impl Sequences {
         if matches!(step, Step::End) {
             return;
         }
+        if !self.narrow.get() {
+            self.open_editor(k, step, is_new);
+            return;
+        }
         let (legend, _) = chip(&step);
         let title = if is_new {
             format!("New {} Step", titlecase(legend))
@@ -1110,7 +1232,9 @@ impl Sequences {
                 f.tile.add_css_class(f.class);
             }
         }
+        self.editor_slot.set_sensitive(!on);
         if on {
+            self.close_editor();
             self.run_content.set_label("Stop");
             self.run_content
                 .set_icon_name("media-playback-stop-symbolic");

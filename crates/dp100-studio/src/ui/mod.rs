@@ -442,11 +442,6 @@ fn install_breakpoint(w: &Rc<Window>) {
         ui.narrow.set(false);
         ui.update_header();
     });
-    w.readouts.narrow_layout(&bp);
-    w.presets.narrow_layout(&bp);
-    w.sequences.narrow_layout(&bp);
-    w.log.narrow_layout(&bp);
-    w.device.narrow_layout(&bp);
     w.ctx.window.add_breakpoint(bp);
 
     let views = w.views.clone();
@@ -564,33 +559,54 @@ fn build(
     let log = Log::new(ctx.clone());
     let sequences = Sequences::new(ctx.clone());
 
+    // Each page lays itself out by the width it gets, which beside the
+    // sidebar is less than the window's.
+    let page = |child: &gtk::Widget, narrow_below: &str| {
+        let bin = adw::BreakpointBin::builder()
+            .width_request(340)
+            .height_request(150)
+            .child(child)
+            .build();
+        let bp = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse(&format!("max-width: {narrow_below}"))
+                .expect("valid condition"),
+        );
+        bin.add_breakpoint(bp.clone());
+        (bin, bp)
+    };
+    let (monitor_page, bp) = page(readouts.root.upcast_ref(), "820sp");
+    readouts.narrow_layout(&bp);
+    let (presets_page, bp) = page(presets.root.widget().upcast_ref(), "600sp");
+    presets.narrow_layout(&bp);
+    let (sequences_page, bp) = page(sequences.root.widget().upcast_ref(), "700sp");
+    sequences.narrow_layout(&bp);
+    let (log_page, bp) = page(log.root.widget().upcast_ref(), "600sp");
+    log.narrow_layout(&bp);
+    let (device_page, bp) = page(device.root.widget().upcast_ref(), "700sp");
+    device.narrow_layout(&bp);
+
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
-        &readouts.root,
+        &monitor_page,
         Some("monitor"),
         "Monitor",
         "utilities-system-monitor-symbolic",
     );
     views.add_titled_with_icon(
-        presets.root.widget(),
+        &presets_page,
         Some("presets"),
         "Presets",
         "view-list-symbolic",
     );
     views.add_titled_with_icon(
-        sequences.root.widget(),
+        &sequences_page,
         Some("sequences"),
         "Sequences",
         "media-playlist-repeat-symbolic",
     );
+    views.add_titled_with_icon(&log_page, Some("log"), "Log", "media-record-symbolic");
     views.add_titled_with_icon(
-        log.root.widget(),
-        Some("log"),
-        "Log",
-        "media-record-symbolic",
-    );
-    views.add_titled_with_icon(
-        device.root.widget(),
+        &device_page,
         Some("device"),
         "Device",
         "preferences-system-symbolic",
@@ -650,7 +666,6 @@ fn build(
         .sidebar(&side)
         .content(&view)
         .max_sidebar_width(220.0)
-        .show_sidebar(false)
         .build();
     toasts.set_child(Some(&split));
     window.set_content(Some(&toasts));
@@ -711,8 +726,10 @@ impl Window {
             self.split.set_collapsed(true);
         } else {
             self.split.set_collapsed(false);
-            self.split.set_show_sidebar(connected);
+            self.split.set_show_sidebar(true);
         }
+        // There are no pages to go to until a DP100 is connected.
+        self.sidebar.set_sensitive(connected);
         self.switcher_bar.set_reveal(connected && narrow);
         let page = self
             .views
