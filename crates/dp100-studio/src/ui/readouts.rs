@@ -98,14 +98,18 @@ impl Channel {
     }
 }
 
+/// A figure under the readings, centred in its third of the row.
 fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
     let b = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(2)
-        .hexpand(true)
+        .halign(gtk::Align::Center)
         .build();
-    b.append(&label(caption, &["stat-caption"]));
+    let c = label(caption, &["caption-heading", "dim-label"]);
+    c.set_xalign(0.5);
+    b.append(&c);
     let v = label("--", &["heading", "numeric"]);
+    v.set_xalign(0.5);
     b.append(&v);
     (v, b)
 }

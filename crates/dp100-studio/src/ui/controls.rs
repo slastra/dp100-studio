@@ -32,9 +32,8 @@ const SETTLE: Duration = Duration::from_millis(250);
 /// before the rows go back to following the device.
 const PENDING_FOR: Duration = Duration::from_secs(2);
 
-const VOLTAGE_NOTE: &str = "Changes apply as you make them; the output stays on or off as it is";
-const POWER_NOTE: &str =
-    "Turn On holds this power by moving the current limit, within the limits below";
+const VOLTAGE_NOTE: &str = "Changes apply as you make them";
+const POWER_NOTE: &str = "Holds a power by moving the current limit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -44,6 +43,15 @@ enum Mode {
 
 pub struct Controls {
     pub setpoint: adw::PreferencesGroup,
+    /// What the output is doing, in words, at the top of the group.
+    status: adw::ActionRow,
+    status_icon: gtk::Image,
+    status_spinner: gtk::Spinner,
+    /// The latest reading, setpoints and hold, for the status row.
+    sample: Cell<Option<BasicInfo>>,
+    output: Cell<Option<(u16, u16)>>,
+    power: Cell<Option<PowerStatus>>,
+    locked: Cell<bool>,
     /// The power button, placed in the readout panel by its owner.
     pub toggle: gtk::Button,
     toggle_content: adw::ButtonContent,
@@ -112,6 +120,18 @@ impl Controls {
             .description(VOLTAGE_NOTE)
             .header_suffix(&modes)
             .build();
+        let status_icon = gtk::Image::builder()
+            .icon_name("system-shutdown-symbolic")
+            .css_classes(["dim-label"])
+            .build();
+        let status_spinner = gtk::Spinner::builder().visible(false).build();
+        let status = adw::ActionRow::builder()
+            .title("Output off")
+            .css_classes(["numeric"])
+            .build();
+        status.add_prefix(&status_icon);
+        status.add_prefix(&status_spinner);
+        setpoint.add(&status);
         setpoint.add(&p);
         setpoint.add(&v);
         setpoint.add(&i);
@@ -129,6 +149,13 @@ impl Controls {
 
         let c = Rc::new(Self {
             setpoint,
+            status,
+            status_icon,
+            status_spinner,
+            sample: Cell::new(None),
+            output: Cell::new(None),
+            power: Cell::new(None),
+            locked: Cell::new(false),
             toggle,
             toggle_content,
             by_voltage,
@@ -322,6 +349,141 @@ impl Controls {
         self.setpoint
             .set_description(Some(if power { POWER_NOTE } else { VOLTAGE_NOTE }));
         self.syncing.set(false);
+        self.show_status();
+    }
+
+    /// The status row: what the output is doing, with an icon in the colour
+    /// of how it's going, and the figures behind it.
+    fn show_status(&self) {
+        enum Look {
+            Off,
+            Good,
+            Warn,
+            Bad,
+            Busy,
+            Locked,
+        }
+        let m = self.sample.get();
+        let on = self.on.get();
+        let (vset, iset) = self.output.get().unwrap_or((0, 0));
+        let power = self.mode.get() == Mode::Power;
+        let want = self.want();
+        let (look, title, detail): (Look, String, String) = if self.locked.get() {
+            (
+                Look::Locked,
+                "A sequence is in control".into(),
+                "It sets the output until it ends".into(),
+            )
+        } else if let Some(m) = m.filter(|m| m.fault != Fault::Ok) {
+            (
+                Look::Bad,
+                format!("Protection tripped ({})", m.fault.label()),
+                "Clear the trip to turn the output on again".into(),
+            )
+        } else if m.is_some_and(|m| m.mode == DeviceMode::NoInput) {
+            (
+                Look::Bad,
+                "No input power".into(),
+                "Connect a USB-C PD charger or a 5–32 V DC supply".into(),
+            )
+        } else if !on {
+            let next = if power {
+                format!(
+                    "Turn On holds {} at up to {} and {}",
+                    watts(want.power),
+                    volts(milli(want.max_voltage)),
+                    amps(milli(want.max_current))
+                )
+            } else {
+                format!(
+                    "Turn On supplies {} with a {} limit",
+                    volts(vset),
+                    amps(iset)
+                )
+            };
+            (Look::Off, "Output off".into(), next)
+        } else if power {
+            // What the worker is holding, and its average over the last
+            // update, which a single reading of a noisy load isn't.
+            let held = self.power.get();
+            let want = held.map_or(want, |p| p.want);
+            let now = held.map_or_else(
+                || m.map_or(0.0, |m| f64::from(m.power_mw()) / 1000.0),
+                |p| p.power,
+            );
+            match held.map(|p| p.state) {
+                Some(HoldState::Holding) => (
+                    Look::Good,
+                    format!("Holding {}", watts(want.power)),
+                    format!("{} now, by moving the current limit", watts(now)),
+                ),
+                Some(HoldState::LimitedByVoltage) => (
+                    Look::Warn,
+                    "Limited by the voltage limit".into(),
+                    format!(
+                        "{} at {}: the load takes no more there",
+                        watts(now),
+                        volts(milli(want.max_voltage))
+                    ),
+                ),
+                Some(HoldState::LimitedByCurrent) => (
+                    Look::Warn,
+                    "Limited by the current limit".into(),
+                    format!(
+                        "{} at {}: raise it to reach {}",
+                        watts(now),
+                        amps(milli(want.max_current)),
+                        watts(want.power)
+                    ),
+                ),
+                _ => (
+                    Look::Busy,
+                    format!("Settling on {}", watts(want.power)),
+                    format!("{} now", watts(now)),
+                ),
+            }
+        } else if m.is_some_and(|m| m.mode == DeviceMode::ConstantCurrent) {
+            (
+                Look::Warn,
+                "Limiting current".into(),
+                format!(
+                    "At the {} limit; the voltage has fallen to {}",
+                    amps(iset),
+                    volts(m.map_or(0, |m| m.vout_mv))
+                ),
+            )
+        } else {
+            (
+                Look::Good,
+                "Regulating voltage".into(),
+                format!(
+                    "Holding {} · {} of the {} limit",
+                    volts(vset),
+                    amps(m.map_or(0, |m| m.iout_ma)),
+                    amps(iset)
+                ),
+            )
+        };
+        let (icon, class) = match look {
+            Look::Off => ("system-shutdown-symbolic", "dim-label"),
+            Look::Good => ("object-select-symbolic", "success"),
+            Look::Warn => ("dialog-warning-symbolic", "warning"),
+            Look::Bad => ("dialog-error-symbolic", "error"),
+            Look::Busy => ("content-loading-symbolic", "accent"),
+            Look::Locked => ("changes-prevent-symbolic", "dim-label"),
+        };
+        let busy = matches!(look, Look::Busy);
+        self.status_spinner.set_visible(busy);
+        self.status_spinner.set_spinning(busy);
+        self.status_icon.set_visible(!busy);
+        self.status_icon.set_icon_name(Some(icon));
+        self.status_icon.set_css_classes(&[class]);
+        if self.status.title() != title {
+            self.status.set_title(&title);
+        }
+        if self.status.subtitle().as_deref() != Some(detail.as_str()) {
+            self.status.set_subtitle(&detail);
+        }
     }
 
     /// While a sequence runs it owns the setpoints.
@@ -335,6 +497,8 @@ impl Controls {
         ] {
             w.set_sensitive(!locked);
         }
+        self.locked.set(locked);
+        self.show_status();
     }
 
     pub fn is_holding(&self) -> bool {
@@ -390,6 +554,7 @@ impl Controls {
     }
 
     pub fn show_output(&self, o: &Setpoints) {
+        self.output.set(Some((o.vset_mv, o.iset_ma)));
         self.syncing.set(true);
         // The rows can't go past the protection limit: the firmware would
         // trip the moment the output came on. (A new upper bound can clamp
@@ -446,12 +611,8 @@ impl Controls {
         // panel, say) leaves the device's own setpoints in charge, so the
         // rows go back to following them. One that ended with the output
         // off stays in power mode, ready to turn on again.
-        if self.ended.take() {
-            if on {
-                self.show_mode(Mode::Voltage);
-            } else {
-                self.setpoint.set_description(Some(POWER_NOTE));
-            }
+        if self.ended.take() && on {
+            self.show_mode(Mode::Voltage);
         }
         // Off always works. On needs input power and no latched trip.
         self.toggle
@@ -460,6 +621,8 @@ impl Controls {
             "Up to {} available from this input",
             volts(m.vo_max_mv)
         ));
+        self.sample.set(Some(*m));
+        self.show_status();
     }
 
     pub fn show_power(&self, st: &PowerStatus) {
@@ -468,28 +631,15 @@ impl Controls {
         if self.mode.get() != Mode::Power {
             self.show_mode(Mode::Power);
         }
-        let want = watts(st.want.power);
-        let now = watts(st.power);
-        let note = match st.state {
-            HoldState::Holding => format!("Holding {want}"),
-            HoldState::Settling => format!("Settling on {want}"),
-            HoldState::Idle => format!("Turn the output on to hold {want}"),
-            HoldState::LimitedByVoltage => format!(
-                "Limited by the voltage limit: {now} at {}",
-                volts(milli(st.want.max_voltage))
-            ),
-            HoldState::LimitedByCurrent => format!(
-                "Limited by the current limit: {now} at {}",
-                amps(milli(st.want.max_current))
-            ),
-        };
-        self.setpoint.set_description(Some(&note));
+        self.power.set(Some(*st));
+        self.show_status();
     }
 
     /// The worker stopped holding power.
     pub fn power_ended(&self) {
         self.holding.set(false);
         self.starting.set(false);
+        self.power.set(None);
         if self.mode.get() == Mode::Power {
             self.ended.set(true);
         }
