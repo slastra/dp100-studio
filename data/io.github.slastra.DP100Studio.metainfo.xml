@@ -85,6 +85,17 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.1" date="2026-10-18">
+      <description>
+        <p>Small changes to the window.</p>
+        <ul>
+          <li>The preset is a dropdown like the sequence's</li>
+          <li>The Sequence card shows its length and limits as figures</li>
+          <li>Keyboard Shortcuts is a dialog like the app's others</li>
+          <li>The window no longer cuts off its right edge at medium widths</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-18">
       <description>
         <p>A new window, built for a desktop, and constant power.</p>

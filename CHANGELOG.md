@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-18
+
 ### DP100 Studio
 
 - The preset in the panel is a dropdown like the sequence's: pick another
@@ -13,6 +15,10 @@ All notable changes to this project are documented here. The format follows
 - The Sequence card's length, voltage and current are figures of their own
   under the picker.
 - The Recording dialog's lamp says whether the DP100 is being read.
+- Keyboard Shortcuts is a dialog like the app's others, rather than a
+  separate window.
+- Fixed: between 760 and about 960 px wide, the window's right edge was
+  cut off; the graph's toolbar now stacks there.
 
 ## [0.2.0] - 2026-10-18
 
@@ -108,6 +114,7 @@ The first release.
 - `dp100` CLI: `list`, `info`, `status`, `watch`, `set`, `on`, `off`,
   `protect`, `clear`, `preset [save|use]`, `system [set]`, `raw`.
 
-[Unreleased]: https://github.com/slastra/dp100-studio/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/slastra/dp100-studio/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/slastra/dp100-studio/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/slastra/dp100-studio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/slastra/dp100-studio/releases/tag/v0.1.0

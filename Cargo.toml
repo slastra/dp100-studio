@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/dp100", "crates/dp100-studio"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Shaun Lastra <shaun@lastra.us>"]
