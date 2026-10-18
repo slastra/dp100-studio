@@ -361,6 +361,11 @@ pub fn expand(row: &adw::ExpanderRow, step: &Step, apply: impl Fn(Step) + 'stati
     let changed = Rc::new(move || {
         let mut ok = true;
         for d in &durations {
+            // A field switched off (a stepped ramp's interval) isn't read.
+            if !d.row.is_sensitive() {
+                d.row.remove_css_class("error");
+                continue;
+            }
             if d.read().is_err() {
                 d.row.add_css_class("error");
                 ok = false;
@@ -372,16 +377,27 @@ pub fn expand(row: &adw::ExpanderRow, step: &Step, apply: impl Fn(Step) + 'stati
             apply(step);
         }
     });
+    // The fields reach the handler weakly and the row holds it, so a row
+    // dropped from the list takes its fields with it: a strong handler on
+    // each field, holding the fields in turn, would keep them all alive.
     for w in made.into_inner() {
-        let c = changed.clone();
+        let c = Rc::downgrade(&changed);
+        let call = move || {
+            if let Some(c) = c.upgrade() {
+                c();
+            }
+        };
         if let Some(r) = w.downcast_ref::<adw::SpinRow>() {
-            r.connect_value_notify(move |_| c());
+            r.connect_value_notify(move |_| call());
         } else if let Some(r) = w.downcast_ref::<adw::SwitchRow>() {
-            r.connect_active_notify(move |_| c());
+            r.connect_active_notify(move |_| call());
         } else if let Some(r) = w.downcast_ref::<adw::ComboRow>() {
-            r.connect_selected_notify(move |_| c());
+            r.connect_selected_notify(move |_| call());
         } else if let Some(r) = w.downcast_ref::<adw::EntryRow>() {
-            r.connect_changed(move |_| c());
+            r.connect_changed(move |_| call());
         }
     }
+    row.connect_notify_local(Some("expanded"), move |_, _| {
+        let _ = &changed;
+    });
 }

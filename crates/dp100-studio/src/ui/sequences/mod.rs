@@ -179,6 +179,18 @@ pub struct Sequences {
     /// Programmatic updates in progress; edits are ignored.
     loading: Cell<bool>,
     running: Cell<bool>,
+    /// Run was pressed and the worker hasn't yet said the run started (or
+    /// refused it): locked as if running.
+    starting: Cell<bool>,
+    /// The sequence as it was sent to run, which a run's progress describes
+    /// whatever is open meanwhile.
+    run_seq: RefCell<Option<Sequence>>,
+    /// The selected file, when it couldn't be read: its path and why.
+    broken: RefCell<Option<(PathBuf, String)>>,
+    /// Bumped each time the step rows are rebuilt, so a late change from a
+    /// row that is being thrown away (a field committing as it loses focus)
+    /// can't land on the step that has taken its place.
+    generation: Cell<u64>,
     current: Cell<Option<usize>>,
     length: Cell<Option<Duration>>,
     ctx: Rc<Ctx>,
@@ -385,6 +397,10 @@ impl Sequences {
             doc: RefCell::new(None),
             loading: Cell::new(false),
             running: Cell::new(false),
+            starting: Cell::new(false),
+            run_seq: RefCell::new(None),
+            broken: RefCell::new(None),
+            generation: Cell::new(0),
             current: Cell::new(None),
             length: Cell::new(None),
             ctx,
@@ -506,6 +522,7 @@ impl Sequences {
             Some(p) => self.open(&p),
             None => {
                 *self.doc.borrow_mut() = None;
+                self.broken.replace(None);
                 self.show_doc();
             }
         }
@@ -516,18 +533,18 @@ impl Sequences {
             .map_err(|e| e.to_string())
             .and_then(|t| Sequence::from_toml(&t))
         {
-            Ok(seq) => *self.doc.borrow_mut() = Some((path.to_owned(), seq)),
+            Ok(seq) => {
+                *self.doc.borrow_mut() = Some((path.to_owned(), seq));
+                self.broken.replace(None);
+            }
             Err(e) => {
-                self.ctx.error(&format!(
-                    "Couldn't open {}: {e}",
-                    path.file_name()
-                        .map(|n| n.to_string_lossy())
-                        .unwrap_or_default()
-                ));
+                // Said on the card, where Delete can still remove it.
                 *self.doc.borrow_mut() = None;
+                self.broken.replace(Some((path.to_owned(), e)));
             }
         }
-        if let Some(k) = self.files.borrow().iter().position(|(p, _)| p == path) {
+        let k = self.files.borrow().iter().position(|(p, _)| p == path);
+        if let Some(k) = k {
             self.loading.set(true);
             self.picker.set_selected(k as u32);
             self.loading.set(false);
@@ -675,12 +692,19 @@ impl Sequences {
     }
 
     fn delete(self: &Rc<Self>) {
-        let Some((path, seq)) = self.doc.borrow().clone() else {
+        // The open sequence, or a selected file that couldn't be read.
+        let doc = self.doc.borrow().clone();
+        let Some((path, name)) = doc.map(|(p, s)| (p, s.sequence.name)).or_else(|| {
+            self.broken.borrow().as_ref().map(|(p, _)| {
+                let file = p.file_name().map(|n| n.to_string_lossy().into_owned());
+                (p.clone(), file.unwrap_or_default())
+            })
+        }) else {
             return;
         };
         let p = self.clone();
         self.ctx.confirm(
-            &format!("Delete “{}”?", seq.sequence.name),
+            &format!("Delete “{name}”?"),
             "The sequence file is removed. This can't be undone.",
             "Delete",
             adw::ResponseAppearance::Destructive,
@@ -695,7 +719,7 @@ impl Sequences {
 
     /// Applies a change to the open sequence, saves it, and refreshes.
     fn edit(self: &Rc<Self>, f: impl FnOnce(&mut Sequence)) {
-        if self.loading.get() {
+        if self.loading.get() || self.running.get() || self.starting.get() {
             return;
         }
         let renamed;
@@ -713,17 +737,23 @@ impl Sequences {
         }
         if renamed {
             // Keep the picker in step without rebuilding the rows under the
-            // user's cursor.
-            if let Some((path, seq)) = self.doc.borrow().as_ref()
-                && let Some(k) = self.files.borrow().iter().position(|(p, _)| p == path)
-            {
+            // user's cursor. Found first, with every borrow let go: a borrow
+            // held across the update below would be borrowed again.
+            let found = {
+                let doc = self.doc.borrow();
+                let files = self.files.borrow();
+                doc.as_ref().and_then(|(path, seq)| {
+                    let k = files.iter().position(|(p, _)| p == path)?;
+                    Some((k, seq.sequence.name.clone()))
+                })
+            };
+            if let Some((k, name)) = found {
                 self.loading.set(true);
-                self.names
-                    .splice(k as u32, 1, &[seq.sequence.name.as_str()]);
+                self.names.splice(k as u32, 1, &[name.as_str()]);
                 self.picker.set_selected(k as u32);
                 self.loading.set(false);
                 if let Some(entry) = self.files.borrow_mut().get_mut(k) {
-                    entry.1 = seq.sequence.name.clone();
+                    entry.1 = name;
                 }
             }
             self.refresh_checks();
@@ -734,8 +764,12 @@ impl Sequences {
 
     /// A step's fields changed: saves it and updates its row in place, so
     /// the step being edited stays open.
-    fn edit_live(&self, k: usize, step: Step) {
-        if self.loading.get() || self.running.get() {
+    fn edit_live(&self, generation: u64, k: usize, step: Step) {
+        if self.loading.get()
+            || self.running.get()
+            || self.starting.get()
+            || generation != self.generation.get()
+        {
             return;
         }
         {
@@ -743,10 +777,10 @@ impl Sequences {
             let Some((path, seq)) = doc.as_mut() else {
                 return;
             };
-            if seq.steps.get(k) == Some(&step) {
-                return;
+            match seq.steps.get_mut(k) {
+                Some(old) if *old != step => *old = step.clone(),
+                _ => return,
             }
-            seq.steps[k] = step.clone();
             if let Err(e) = save(path, seq) {
                 self.ctx.error(&format!("Couldn't save: {e}"));
             }
@@ -788,19 +822,25 @@ impl Sequences {
 
     /// Editing is for a sequence that is open and not running.
     fn lock(&self) {
-        let free = self.doc.borrow().is_some() && !self.running.get();
+        let busy = self.running.get() || self.starting.get();
+        let free = self.doc.borrow().is_some() && !busy;
         for w in &self.editors {
             w.set_sensitive(free);
         }
-        self.picker.set_sensitive(!self.running.get());
-        self.more.set_sensitive(!self.running.get());
+        self.picker.set_sensitive(!busy);
+        self.more.set_sensitive(!busy);
         for r in self.step_rows.borrow().iter() {
             r.set_sensitive(free);
         }
     }
 
     fn show_steps(self: &Rc<Self>) {
-        for r in self.step_rows.borrow_mut().drain(..) {
+        // The old rows' fields may commit as they lose focus on the way
+        // out; the new generation makes that a no-op. Taken out first, so
+        // nothing they set off finds the list borrowed.
+        self.generation.set(self.generation.get() + 1);
+        let old = std::mem::take(&mut *self.step_rows.borrow_mut());
+        for r in old {
             self.steps_group.remove(&r);
         }
         let report = self.report();
@@ -933,9 +973,10 @@ impl Sequences {
         row.insert_action_group("step", Some(&actions));
         self.draggable(row.upcast_ref(), &handle, k);
         let w = Rc::downgrade(self);
+        let generation = self.generation.get();
         editor::expand(&row, step, move |new| {
             if let Some(p) = w.upgrade() {
-                p.edit_live(k, new);
+                p.edit_live(generation, k, new);
             }
         });
         row.set_expanded(self.expanded.get() == Some(k));
@@ -1027,17 +1068,31 @@ impl Sequences {
         let Some((_, seq)) = doc.as_ref() else {
             self.issues_group.set_visible(false);
             self.picker.set_subtitle("");
-            self.show_status(
-                Some(("document-new-symbolic", "dim-label")),
-                "No sequences yet",
-                "Start one with New Sequence, in the menu below",
-            );
+            match self.broken.borrow().as_ref() {
+                Some((path, why)) => self.show_status(
+                    Some(("dialog-error-symbolic", "error")),
+                    &format!(
+                        "Can't open {}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default()
+                    ),
+                    why,
+                ),
+                None => self.show_status(
+                    Some(("document-new-symbolic", "dim-label")),
+                    "No sequences yet",
+                    "Start one with New Sequence, in the menu below",
+                ),
+            }
             self.run.set_sensitive(false);
             return;
         };
         let report = validate(seq, &self.limits_now());
         let length = estimate(seq);
-        self.length.set(length);
+        if !self.running.get() && !self.starting.get() {
+            self.length.set(length);
+        }
 
         let mut rows = Vec::new();
         for (icon, class, text) in report
@@ -1066,7 +1121,7 @@ impl Sequences {
         self.issues_group.set_visible(!rows.is_empty());
         *self.issue_rows.borrow_mut() = rows;
 
-        if self.running.get() {
+        if self.running.get() || self.starting.get() {
             return;
         }
         self.picker.set_subtitle(&summary(seq, &report, length));
@@ -1166,6 +1221,11 @@ impl Sequences {
             let (Some(p), Ok(from)) = (w.upgrade(), value.get::<u32>()) else {
                 return false;
             };
+            // A value still being typed is committed to the step it belongs
+            // to before anything moves.
+            if let Some(root) = p.steps_group.root() {
+                root.set_focus(None::<&gtk::Widget>);
+            }
             // After the drop finishes: moving rebuilds the rows, this one
             // included.
             glib::idle_add_local_once(move || p.move_step(from as usize, k));
@@ -1210,9 +1270,16 @@ impl Sequences {
         if !report.ok() {
             return;
         }
-        let ctx = self.ctx.clone();
+        if self.starting.get() {
+            return;
+        }
         let name = seq.sequence.name.clone();
-        let start = move || ctx.command(Command::RunSequence(Box::new(seq.clone())));
+        let w = Rc::downgrade(self);
+        let start = move || {
+            if let Some(p) = w.upgrade() {
+                p.start(seq.clone());
+            }
+        };
         if report.turns_on {
             self.ctx.confirm(
                 &format!("Run “{name}”?"),
@@ -1230,8 +1297,36 @@ impl Sequences {
         }
     }
 
+    /// Sends the sequence to run, locking the card until the worker says
+    /// it started, ended or was refused.
+    fn start(&self, seq: Sequence) {
+        self.length.set(estimate(&seq));
+        self.run_seq.replace(Some(seq.clone()));
+        self.starting.set(true);
+        self.lock();
+        self.run.set_sensitive(false);
+        self.show_status(None, "Starting", "");
+        self.ctx.command(Command::RunSequence(Box::new(seq)));
+    }
+
+    /// An action failed; if it was a run starting, nothing is running.
+    pub fn refused(&self) {
+        if self.starting.get() && !self.running.get() {
+            self.set_running(false);
+        }
+    }
+
     fn set_running(&self, on: bool) {
+        let was_starting = self.starting.replace(false);
+        if !on {
+            self.run_seq.replace(None);
+        }
         if self.running.replace(on) == on {
+            // A start that ended or was refused before it began.
+            if was_starting {
+                self.lock();
+                self.refresh_checks();
+            }
             return;
         }
         self.lock();
@@ -1260,10 +1355,10 @@ impl Sequences {
             self.mark_current();
         }
         let now = self
-            .doc
+            .run_seq
             .borrow()
             .as_ref()
-            .and_then(|(_, s)| s.steps.get(st.step).map(|s| line(s).0))
+            .and_then(|s| s.steps.get(st.step).map(|s| line(s).0))
             .unwrap_or_else(|| st.summary.clone());
         let holding = st.power.map_or(String::new(), |(_, w, _)| {
             format!(" · holding {}", crate::ui::controls::watts(w))

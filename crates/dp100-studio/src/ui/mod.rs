@@ -955,6 +955,7 @@ impl Window {
             Event::Done(Ok(None)) => {}
             Event::Done(Err(e)) => {
                 self.readouts.refused();
+                self.sequences.refused();
                 self.ctx.error(&e);
             }
             Event::Released => {
