@@ -135,8 +135,8 @@ impl Controls {
             .title("Output off")
             .css_classes(["numeric"])
             .build();
-        status.add_prefix(&status_icon);
-        status.add_prefix(&status_spinner);
+        status.add_suffix(&status_spinner);
+        status.add_suffix(&status_icon);
         setpoint.add(&status);
         setpoint.add(&p);
         setpoint.add(&v);
