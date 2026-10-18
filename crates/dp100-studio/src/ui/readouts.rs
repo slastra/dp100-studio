@@ -17,7 +17,6 @@ use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
-use super::page::Page;
 use super::panel::{Panel, Tone};
 use crate::seq::power::HoldState;
 use crate::worker::PowerStatus;
@@ -101,13 +100,15 @@ const LAMPS: [(&str, &str, Tone); 8] = [
 ];
 
 /// The time windows offered, in seconds.
-const WINDOWS: [(&str, f64); 6] = [
-    ("10 s", 10.0),
-    ("30 s", 30.0),
-    ("1 min", 60.0),
-    ("5 min", 300.0),
-    ("15 min", 900.0),
-    ("1 h", 3600.0),
+/// The graph's time windows: a short label, as charting tools write them,
+/// and what it says in full.
+const WINDOWS: [(&str, &str, f64); 6] = [
+    ("10s", "Last 10 seconds", 10.0),
+    ("30s", "Last 30 seconds", 30.0),
+    ("1m", "Last minute", 60.0),
+    ("5m", "Last 5 minutes", 300.0),
+    ("15m", "Last 15 minutes", 900.0),
+    ("1h", "Last hour", 3600.0),
 ];
 
 /// A row of toggle buttons drawn as one segmented control. Clicking one
@@ -143,8 +144,10 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
 
     let windows = segmented();
     let mut first: Option<gtk::ToggleButton> = None;
-    for (text, secs) in WINDOWS {
+    for (text, full, secs) in WINDOWS {
         let b = segment(text);
+        b.set_tooltip_text(Some(full));
+        b.update_property(&[gtk::accessible::Property::Label(full)]);
         b.set_active(secs == 30.0);
         if let Some(f) = &first {
             b.set_group(Some(f));
@@ -221,10 +224,16 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
     value
 }
 
+/// How wide the column of readouts and setpoints is beside the graph.
+const COLUMN_WIDTH: i32 = 430;
+
 pub struct Readouts {
-    pub root: Page,
+    /// The readouts and setpoints in a column beside the graph, which fills
+    /// the rest of the window; on a narrow window, all in one column.
+    pub root: gtk::ScrolledWindow,
+    body: gtk::Box,
+    column: gtk::ScrolledWindow,
     panel: Panel,
-    channels: gtk::Box,
     graph_bar: gtk::FlowBox,
     lane_toggles: gtk::Box,
     controls: Rc<Controls>,
@@ -244,19 +253,19 @@ pub struct Readouts {
 
 impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
-        // A preferences page like the others, so every page has the same
-        // width and margins.
-        let root = Page::new();
-        let group = |w: &gtk::Widget| {
-            let g = adw::PreferencesGroup::new();
-            g.add(w);
-            root.add(&g);
-        };
+        let left = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(24)
+            .build();
 
-        // --- the instrument panel ---
+        // --- the instrument panel, laid out for a column ---
         let panel = Panel::new(&LAMPS, Some(controls.toggle.upcast_ref()));
+        panel.compact(Some(controls.toggle.upcast_ref()));
 
-        let channels = gtk::Box::builder().spacing(28).homogeneous(true).build();
+        let channels = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .build();
         let (volts, b) = Channel::new("VOLTAGE", "V", "volt");
         channels.append(&b);
         let (amps, b) = Channel::new("CURRENT", "A", "amp");
@@ -272,9 +281,16 @@ impl Readouts {
         let (temp, b) = stat("TEMPERATURE");
         super::panel::add_to_flow(&footer, &b);
         panel.body.append(&footer);
-        group(panel.root.upcast_ref());
+        left.append(&panel.root);
 
-        root.add(&controls.setpoint);
+        left.append(&controls.setpoint);
+
+        let output = adw::PreferencesGroup::builder().title("Details").build();
+        let protection = row(&output, "Protection trips");
+        let preset = row(&output, "Active preset");
+        let delivered = row(&output, "Delivered since connecting");
+        let rail = row(&output, "Internal 5 V rail");
+        left.append(&output);
 
         let graph = Graph::default();
         if let Some(secs) = std::env::var("DP100_STUDIO_PREFILL_SECS")
@@ -284,19 +300,35 @@ impl Readouts {
             graph.prefill(secs);
         }
         let (section, graph_bar, lane_toggles) = graph_section(&graph);
-        group(section.upcast_ref());
+        section.set_hexpand(true);
+        section.set_vexpand(true);
 
-        let output = adw::PreferencesGroup::builder().title("Details").build();
-        let protection = row(&output, "Protection trips");
-        let preset = row(&output, "Active preset");
-        let delivered = row(&output, "Delivered since connecting");
-        let rail = row(&output, "Internal 5 V rail");
-        root.add(&output);
+        // Beside the graph the column scrolls by itself, so the graph keeps
+        // the window's height.
+        let column = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .width_request(COLUMN_WIDTH)
+            .child(&left)
+            .build();
+        let body = gtk::Box::builder()
+            .spacing(24)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(18)
+            .margin_end(18)
+            .build();
+        body.append(&column);
+        body.append(&section);
+        let root = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&body)
+            .build();
 
         Self {
             root,
+            body,
+            column,
             panel,
-            channels: channels.clone(),
             graph_bar,
             lane_toggles,
             controls,
@@ -315,15 +347,20 @@ impl Readouts {
         }
     }
 
-    /// On a narrow window, rows that would overflow are stacked: the power
-    /// switch drops below the lamps at full width, and the lane toggles go
-    /// under the time windows.
+    /// On a narrow window everything goes in one column, the graph under
+    /// the readouts, and the lane toggles go under the time windows.
     pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+        // One column: the readouts, then the graph, scrolling together.
         let vertical = gtk::Orientation::Vertical.to_value();
-        self.panel
-            .narrow_layout(bp, Some(self.controls.toggle.upcast_ref()));
-        bp.add_setter(&self.channels, "orientation", Some(&vertical));
-        bp.add_setter(&self.channels, "spacing", Some(&18.to_value()));
+        bp.add_setter(&self.body, "orientation", Some(&vertical));
+        bp.add_setter(&self.body, "margin-start", Some(&12.to_value()));
+        bp.add_setter(&self.body, "margin-end", Some(&12.to_value()));
+        bp.add_setter(&self.column, "width-request", Some(&(-1).to_value()));
+        bp.add_setter(
+            &self.column,
+            "vscrollbar-policy",
+            Some(&gtk::PolicyType::Never.to_value()),
+        );
         bp.add_setter(
             &self.graph_bar,
             "max-children-per-line",

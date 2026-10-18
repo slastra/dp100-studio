@@ -471,8 +471,8 @@ fn build(
         } else {
             "DP100 Studio"
         })
-        .default_width(640)
-        .default_height(900)
+        .default_width(1200)
+        .default_height(820)
         .width_request(360)
         .height_request(294)
         .build();
@@ -565,7 +565,7 @@ fn build(
 
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
-        readouts.root.widget(),
+        &readouts.root,
         Some("monitor"),
         "Monitor",
         "utilities-system-monitor-symbolic",

@@ -101,6 +101,16 @@ impl Panel {
 
     /// On a narrow window the lamps and the action stack, the action at
     /// full width.
+    /// Lays the panel out for a narrow column for good: the action under
+    /// the lamps and as wide as the panel.
+    pub fn compact(&self, action: Option<&gtk::Widget>) {
+        self.top.set_orientation(gtk::Orientation::Vertical);
+        self.top.set_spacing(12);
+        if let Some(a) = action {
+            a.set_halign(gtk::Align::Fill);
+        }
+    }
+
     pub fn narrow_layout(&self, bp: &adw::Breakpoint, action: Option<&gtk::Widget>) {
         bp.add_setter(
             &self.top,
