@@ -123,12 +123,32 @@ impl Panel {
 
     /// On a narrow window the lamps and the action stack, the action at
     /// full width.
-    /// Puts the lamps in rows of `n`, for lamps that fall into groups of
-    /// that many.
-    pub fn lamps_per_line(&self, n: u32) {
-        self.lamp_row.set_min_children_per_line(n);
-        self.lamp_row.set_max_children_per_line(n);
-        self.lamp_row.set_homogeneous(true);
+    /// Puts the lamps in rows of `n`, spread across the panel: the first of
+    /// each row at the left edge, the last at the right, and all as wide as
+    /// the widest, so the rows line up as columns.
+    pub fn lamps_per_line(&self, n: usize) {
+        let rows = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .hexpand(true)
+            .build();
+        let same = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+        for chunk in self.lamps.chunks(n.max(1)) {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            for (k, lamp) in chunk.iter().enumerate() {
+                if let Some(cell) = lamp.parent() {
+                    self.lamp_row.remove(&cell);
+                }
+                if k > 0 {
+                    row.append(&gtk::Box::builder().hexpand(true).build());
+                }
+                same.add_widget(lamp);
+                row.append(lamp);
+            }
+            rows.append(&row);
+        }
+        self.top.remove(&self.lamp_row);
+        self.top.prepend(&rows);
     }
 
     /// Lays the panel out for a narrow column for good: the action under
