@@ -37,17 +37,27 @@ pub struct Panel {
     pub top: gtk::Box,
     pub body: gtk::Box,
     lamp_row: gtk::FlowBox,
-    lamps: Vec<gtk::Label>,
+    lamps: Vec<gtk::Box>,
 }
 
 impl Panel {
     /// `lamps` are (legend, tooltip, tone). `action` goes at the top right.
     pub fn new(lamps: &[(&str, &str, Tone)], action: Option<&gtk::Widget>) -> Self {
+        // A stock card, its contents inset as a boxed list's rows are.
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
-            .css_classes(["card", "instrument"])
+            .css_classes(["card"])
             .build();
+        let inner = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(18)
+            .margin_end(18)
+            .build();
+        root.append(&inner);
         let top = gtk::Box::builder().spacing(6).build();
         // Lamps wrap onto more lines when the window is narrow.
         let row = gtk::FlowBox::builder()
@@ -58,15 +68,25 @@ impl Panel {
             .valign(gtk::Align::Center)
             .halign(gtk::Align::Start)
             .build();
-        let lamps: Vec<gtk::Label> = lamps
+        // Each lamp is an indicator, not a control: an LED and its legend,
+        // with nothing around them that could pass for a button.
+        let lamps: Vec<gtk::Box> = lamps
             .iter()
             .map(|(legend, tip, tone)| {
-                let l = gtk::Label::builder()
-                    .label(*legend)
+                let l = gtk::Box::builder()
+                    .spacing(6)
                     .css_classes(["lamp", tone.class()])
                     .tooltip_text(*tip)
                     .valign(gtk::Align::Center)
                     .build();
+                l.append(
+                    &gtk::Box::builder()
+                        .css_classes(["led"])
+                        .valign(gtk::Align::Center)
+                        .build(),
+                );
+                l.append(&gtk::Label::new(Some(legend)));
+                l.update_property(&[gtk::accessible::Property::Label(tip)]);
                 add_to_flow(&row, &l);
                 l
             })
@@ -76,12 +96,12 @@ impl Panel {
         if let Some(a) = action {
             top.append(a);
         }
-        root.append(&top);
+        inner.append(&top);
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
             .build();
-        root.append(&body);
+        inner.append(&body);
         Self {
             root,
             top,
@@ -140,18 +160,18 @@ pub fn figure(caption: &str, class: &str) -> (gtk::Label, gtk::Box) {
         .orientation(gtk::Orientation::Vertical)
         .spacing(2)
         .hexpand(true)
-        .css_classes(["tile", class])
+        .css_classes([class])
         .build();
     b.append(
         &gtk::Label::builder()
             .label(caption)
-            .css_classes(["stat-caption"])
+            .css_classes(["caption-heading", "dim-label"])
             .xalign(0.0)
             .build(),
     );
     let v = gtk::Label::builder()
         .label("--")
-        .css_classes(["tile-value", "numeric"])
+        .css_classes(["title-2", "numeric"])
         .xalign(0.0)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
@@ -169,7 +189,6 @@ pub fn footer() -> gtk::FlowBox {
         .max_children_per_line(4)
         .column_spacing(12)
         .row_spacing(12)
-        .css_classes(["instrument-footer"])
         .build()
 }
 

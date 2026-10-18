@@ -9,7 +9,6 @@ use dp100::{BasicInfo, DeviceInfo, Setpoints, SystemSettings};
 use gtk::glib;
 
 use super::ctx::{Ctx, milli, volts};
-use super::page::{Columns, Page};
 use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
@@ -94,8 +93,8 @@ fn spin(title: &str, subtitle: &str, min: f64, max: f64, step: f64, digits: u32)
 }
 
 pub struct Device {
-    pub root: Page,
-    columns: Columns,
+    /// For the Device preferences dialog.
+    pub root: adw::PreferencesPage,
     protection: Rc<Form>,
     ovp: adw::SpinRow,
     ocp: adw::SpinRow,
@@ -136,7 +135,7 @@ const LAMPS: [(&str, &str, Tone); 3] = [
 
 impl Device {
     pub fn new(ctx: Rc<Ctx>, simulated: bool) -> Rc<Self> {
-        let root = Page::new();
+        let root = adw::PreferencesPage::new();
 
         // --- the unit, as a panel ---
         let release = gtk::Button::builder()
@@ -146,7 +145,7 @@ impl Device {
                     .label("Release Panel")
                     .build(),
             )
-            .css_classes(["pill", "power-button"])
+            .css_classes(["pill"])
             .valign(gtk::Align::Center)
             .tooltip_text("Unlock the DP100's Buttons Until You Reconnect")
             .action_name("win.release")
@@ -154,11 +153,11 @@ impl Device {
         let panel = Panel::new(&LAMPS, Some(release.upcast_ref()));
         let title = gtk::Label::builder()
             .label("DP100")
-            .css_classes(["seq-title"])
+            .css_classes(["title-1"])
             .xalign(0.0)
             .build();
         let meta = gtk::Label::builder()
-            .css_classes(["channel-note"])
+            .css_classes(["dim-label"])
             .xalign(0.0)
             .wrap(true)
             .selectable(true)
@@ -179,12 +178,10 @@ impl Device {
         super::panel::add_to_flow(&foot, &b);
         let (rail, b) = figure("5 V RAIL", "plain");
         super::panel::add_to_flow(&foot, &b);
-        foot.add_css_class("compact");
         panel.body.append(&foot);
         let hg = adw::PreferencesGroup::new();
         hg.add(&panel.root);
         root.add(&hg);
-        let columns = Columns::new(&root);
 
         let protection = Form::new("Save the Trips to the Active Preset");
         let pg = adw::PreferencesGroup::builder()
@@ -199,7 +196,7 @@ impl Device {
         let ocp = spin("Over-current trip (A)", "", 0.0, 5.05, 0.001, 3);
         pg.add(&ovp);
         pg.add(&ocp);
-        columns.left.append(&pg);
+        root.add(&pg);
 
         let system = Form::new("Save These Settings to the DP100");
         let sg = adw::PreferencesGroup::builder()
@@ -222,7 +219,7 @@ impl Device {
         }
         sg.add(&rpp);
         sg.add(&auto_on);
-        columns.right.append(&sg);
+        root.add(&sg);
 
         for r in [&ovp, &ocp] {
             protection.watch(r, "value");
@@ -236,7 +233,6 @@ impl Device {
 
         let d = Rc::new(Self {
             root,
-            columns,
             protection,
             ovp,
             ocp,
@@ -368,7 +364,6 @@ impl Device {
     pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
         self.panel
             .narrow_layout(bp, Some(self.release.upcast_ref()));
-        self.columns.narrow_layout(bp);
     }
 
     pub fn show_output(&self, o: &Setpoints) {

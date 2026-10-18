@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use dp100::Setpoints;
+use gtk::{gio, glib};
 
 use super::ctx::{Ctx, amps, milli, volts};
 use super::page::Page;
@@ -67,12 +68,12 @@ impl Row {
         slot.append(
             &gtk::Label::builder()
                 .label(format!("M{n}"))
-                .css_classes(["preset-slot"])
+                .css_classes(["caption-heading"])
                 .build(),
         );
         let active = gtk::Label::builder()
             .label("IN USE")
-            .css_classes(["active-tag"])
+            .css_classes(["caption-heading", "accent"])
             .visible(false)
             .build();
         slot.append(&active);
@@ -84,8 +85,8 @@ impl Row {
                 .xalign(0.0)
                 .build()
         };
-        let volts = num(&["preset-volts", "numeric"]);
-        let amps = num(&["preset-amps", "numeric"]);
+        let volts = num(&["numeric"]);
+        let amps = num(&["numeric"]);
         let ovp = num(&["numeric", "dim-label"]);
         let ocp = num(&["numeric", "dim-label"]);
 
@@ -124,10 +125,7 @@ impl Row {
         );
         b.set_margin_top(6);
         b.set_margin_bottom(6);
-        let root = gtk::ListBoxRow::builder()
-            .child(&b)
-            .css_classes(["preset-row"])
-            .build();
+        let root = gtk::ListBoxRow::builder().child(&b).build();
         Self {
             root,
             volts,
@@ -151,6 +149,11 @@ pub struct Presets {
     trip_columns: Vec<gtk::Widget>,
     /// The current limit's heading, shortened on a narrow window.
     limit_caption: gtk::Label,
+    /// For the main window's panel: the preset in use, and a menu to recall
+    /// another.
+    pub recall: adw::PreferencesGroup,
+    recall_row: adw::ActionRow,
+    recall_menu: gio::Menu,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
@@ -169,7 +172,7 @@ impl Presets {
             .collect();
         let panel = Panel::new(&lamp_spec, None);
         let title = gtk::Label::builder()
-            .css_classes(["seq-title"])
+            .css_classes(["title-1"])
             .xalign(0.0)
             .build();
         let meta = gtk::Label::builder()
@@ -177,7 +180,7 @@ impl Presets {
                 "The DP100's memories, recalled from its own panel. Edit them below; \
                  Use switches to one now, which turns the output off.",
             )
-            .css_classes(["channel-note"])
+            .css_classes(["dim-label"])
             .xalign(0.0)
             .wrap(true)
             .build();
@@ -189,7 +192,6 @@ impl Presets {
         head.append(&meta);
         panel.body.append(&head);
         let foot = footer();
-        foot.add_css_class("compact");
         let fig = |caption: &str, class: &str| {
             let (v, b) = figure(caption, class);
             super::panel::add_to_flow(&foot, &b);
@@ -216,7 +218,7 @@ impl Presets {
         let caption = |text: &str| {
             gtk::Label::builder()
                 .label(text)
-                .css_classes(["stat-caption"])
+                .css_classes(["caption-heading", "dim-label"])
                 .xalign(0.0)
                 .build()
         };
@@ -251,6 +253,23 @@ impl Presets {
         }
         group.add(&list);
 
+        let recall_menu = gio::Menu::new();
+        let recall_row = adw::ActionRow::builder()
+            .title("Preset")
+            .subtitle("Boot default")
+            .build();
+        recall_row.add_suffix(
+            &gtk::MenuButton::builder()
+                .label("Recall")
+                .menu_model(&recall_menu)
+                .css_classes(["flat"])
+                .valign(gtk::Align::Center)
+                .tooltip_text("Switch the DP100 to a Stored Preset")
+                .build(),
+        );
+        let recall = adw::PreferencesGroup::new();
+        recall.add(&recall_row);
+
         let p = Rc::new(Self {
             root,
             panel,
@@ -259,6 +278,9 @@ impl Presets {
             rows,
             trip_columns,
             limit_caption,
+            recall,
+            recall_row,
+            recall_menu,
             active: Cell::new(0),
             ctx,
         });
@@ -277,6 +299,21 @@ impl Presets {
                 }
             });
         }
+        // The recall menu's items.
+        let actions = gio::SimpleActionGroup::new();
+        let w = Rc::downgrade(&p);
+        let use_action = gio::ActionEntry::builder("use")
+            .parameter_type(Some(glib::VariantTy::BYTE))
+            .activate(move |_: &gio::SimpleActionGroup, _, v| {
+                if let (Some(p), Some(n)) = (w.upgrade(), v.and_then(|v| v.get::<u8>())) {
+                    p.use_preset(n);
+                }
+            })
+            .build();
+        actions.add_action_entries([use_action]);
+        p.recall.insert_action_group("preset", Some(&actions));
+        p.fill_recall_menu(&[]);
+
         // Clicking a row edits it, unless it is the one in use.
         let w = Rc::downgrade(&p);
         list.connect_row_activated(move |_, row| {
@@ -400,6 +437,44 @@ impl Presets {
             c.ovp.set_label(&volts(p.ovp_mv));
             c.ocp.set_label(&amps(p.ocp_ma));
         }
+        self.fill_recall_menu(presets);
+        self.show_recall();
+    }
+
+    /// M1 to M9 with what each holds, then the way to edit them.
+    fn fill_recall_menu(&self, presets: &[Setpoints]) {
+        self.recall_menu.remove_all();
+        let memories = gio::Menu::new();
+        for n in 1..=9u8 {
+            let label = match presets.get(usize::from(n) - 1) {
+                Some(p) => format!("M{n}   {} · {}", volts(p.vset_mv), amps(p.iset_ma)),
+                None => format!("M{n}"),
+            };
+            let item = gio::MenuItem::new(Some(&label), None);
+            item.set_action_and_target_value(Some("preset.use"), Some(&n.to_variant()));
+            memories.append_item(&item);
+        }
+        self.recall_menu.append_section(None, &memories);
+        let edit = gio::Menu::new();
+        edit.append(Some("_Edit Presets"), Some("win.page::presets"));
+        self.recall_menu.append_section(None, &edit);
+    }
+
+    /// The recall row's subtitle: the preset in use and what it holds.
+    fn show_recall(&self) {
+        let n = self.active.get();
+        let held = self
+            .ctx
+            .live
+            .borrow()
+            .presets
+            .get(usize::from(n).wrapping_sub(1))
+            .map(|p| format!(" · {} · {}", volts(p.vset_mv), amps(p.iset_ma)));
+        self.recall_row.set_subtitle(&if n == 0 {
+            "Boot default".to_owned()
+        } else {
+            format!("M{n}{}", held.unwrap_or_default())
+        });
     }
 
     /// The live output, for the panel's figures.
@@ -422,16 +497,12 @@ impl Presets {
         } else {
             format!("M{index} in use")
         });
+        self.show_recall();
         for (k, c) in self.rows.iter().enumerate() {
             let is = k as u8 + 1 == index;
             c.active.set_visible(is);
             c.activate.set_sensitive(!is);
             c.root.set_activatable(!is);
-            if is {
-                c.root.add_css_class("active");
-            } else {
-                c.root.remove_css_class("active");
-            }
             // The firmware won't take a save to the preset in use; its
             // values are changed live from the Monitor and Device pages.
             c.edit.set_sensitive(!is);

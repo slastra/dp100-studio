@@ -47,9 +47,9 @@ impl Channel {
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
             .hexpand(true)
-            .css_classes(["channel", class])
+            .css_classes([class])
             .build();
-        b.append(&label(caption, &["channel-caption"]));
+        b.append(&label(caption, &["caption-heading"]));
         let line = gtk::Box::builder().spacing(6).build();
         let value = gtk::Label::builder()
             .label("--")
@@ -58,17 +58,15 @@ impl Channel {
             .build();
         let unit = gtk::Label::builder()
             .label(unit)
-            .css_classes(["reading-unit"])
+            .css_classes(["title-2", "dim-label"])
             .valign(gtk::Align::BaselineFill)
             .build();
         line.append(&value);
         line.append(&unit);
         b.append(&line);
-        let bar = gtk::ProgressBar::builder()
-            .css_classes(["headroom", class])
-            .build();
+        let bar = gtk::ProgressBar::builder().css_classes([class]).build();
         b.append(&bar);
-        let note = label("", &["channel-note", "numeric"]);
+        let note = label("", &["dim-label", "numeric"]);
         b.append(&note);
         (Self { value, bar, note }, b)
     }
@@ -82,7 +80,7 @@ fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
         .hexpand(true)
         .build();
     b.append(&label(caption, &["stat-caption"]));
-    let v = label("--", &["stat-value", "numeric"]);
+    let v = label("--", &["heading", "numeric"]);
     b.append(&v);
     (v, b)
 }
@@ -115,7 +113,7 @@ const WINDOWS: [(&str, &str, f64); 6] = [
 /// doesn't take keyboard focus, so no focus ring is left behind; Tab still
 /// reaches them.
 fn segmented() -> gtk::Box {
-    gtk::Box::builder().css_classes(["segmented"]).build()
+    gtk::Box::builder().css_classes(["linked"]).build()
 }
 
 fn segment(label: &str) -> gtk::ToggleButton {
@@ -128,19 +126,14 @@ fn segment(label: &str) -> gtk::ToggleButton {
 /// The graph with its window, lane and pause controls above it. Returns the
 /// section, the control bar and the lane toggles, which a narrow window
 /// stacks.
-fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
+fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
         .build();
     // The two halves wrap rather than hold one long row: a page whose
     // content can't get narrow is clamped wider than the others.
-    let bar = gtk::FlowBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .max_children_per_line(2)
-        .column_spacing(12)
-        .row_spacing(8)
-        .build();
+    let bar = gtk::Box::builder().spacing(12).build();
 
     let windows = segmented();
     let mut first: Option<gtk::ToggleButton> = None;
@@ -163,7 +156,7 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
         windows.append(&b);
     }
     windows.set_halign(gtk::Align::Start);
-    super::panel::add_to_flow(&bar, &windows);
+    bar.append(&windows);
 
     // Lane toggles and pause stay together, so a narrow window can move
     // them under the time windows as one row.
@@ -175,7 +168,6 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
     let lanes = segmented();
     for lane in Lane::ALL {
         let b = segment(lane.short());
-        b.add_css_class(lane.css_class());
         b.set_tooltip_text(Some(&format!("Show {}", lane.name())));
         b.set_active(graph.lane_shown(lane));
         let g = graph.clone();
@@ -201,14 +193,11 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::FlowBox, gtk::Box) {
         });
     });
     right.append(&pause);
-    super::panel::add_to_flow(&bar, &right);
+    bar.append(&right);
 
     section.append(&bar);
-    let frame = gtk::Box::builder()
-        .css_classes(["card", "graph-card"])
-        .build();
-    frame.append(graph);
-    section.append(&frame);
+    // On the window's own background, not in a card: the graph is the page.
+    section.append(graph);
     (section, bar, right)
 }
 
@@ -224,17 +213,16 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
     value
 }
 
-/// How wide the column of readouts and setpoints is beside the graph.
-const COLUMN_WIDTH: i32 = 380;
+/// The narrowest the panel of readouts and setpoints goes beside the graph.
+pub const PANEL_WIDTH: i32 = 340;
 
 pub struct Readouts {
-    /// The readouts and setpoints in a column beside the graph, which fills
-    /// the rest of the window; on a narrow window, all in one column.
-    pub root: gtk::ScrolledWindow,
-    body: gtk::Box,
-    column: gtk::ScrolledWindow,
+    /// The panel's contents: lamps and readings, setpoints, details.
+    pub pane: gtk::Box,
+    /// The graph and its toolbar, which fill the rest of the window.
+    pub graph_area: gtk::Box,
     panel: Panel,
-    graph_bar: gtk::FlowBox,
+    graph_bar: gtk::Box,
     lane_toggles: gtk::Box,
     controls: Rc<Controls>,
     graph: Graph,
@@ -244,7 +232,6 @@ pub struct Readouts {
     vin: gtk::Label,
     temp: gtk::Label,
     protection: gtk::Label,
-    preset: gtk::Label,
     delivered: gtk::Label,
     rail: gtk::Label,
     last_labels: Cell<Option<Instant>>,
@@ -253,9 +240,13 @@ pub struct Readouts {
 
 impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
-        let left = gtk::Box::builder()
+        let pane = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(24)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(18)
+            .margin_end(18)
             .build();
 
         // --- the instrument panel, laid out for a column ---
@@ -274,25 +265,24 @@ impl Readouts {
         channels.append(&b);
         panel.body.append(&channels);
 
-        let footer = super::panel::footer();
-        footer.set_max_children_per_line(3);
+        let footer = gtk::Box::builder().spacing(12).homogeneous(true).build();
         let (power, b) = stat("POWER");
-        super::panel::add_to_flow(&footer, &b);
+        footer.append(&b);
         let (vin, b) = stat("INPUT");
-        super::panel::add_to_flow(&footer, &b);
-        let (temp, b) = stat("TEMPERATURE");
-        super::panel::add_to_flow(&footer, &b);
+        footer.append(&b);
+        let (temp, b) = stat("TEMP");
+        b.set_tooltip_text(Some("Temperature"));
+        footer.append(&b);
         panel.body.append(&footer);
-        left.append(&panel.root);
+        pane.append(&panel.root);
 
-        left.append(&controls.setpoint);
+        pane.append(&controls.setpoint);
 
         let output = adw::PreferencesGroup::builder().title("Details").build();
         let protection = row(&output, "Protection trips");
-        let preset = row(&output, "Active preset");
         let delivered = row(&output, "Delivered since connecting");
         let rail = row(&output, "Internal 5 V rail");
-        left.append(&output);
+        pane.append(&output);
 
         let graph = Graph::default();
         if let Some(secs) = std::env::var("DP100_STUDIO_PREFILL_SECS")
@@ -301,35 +291,17 @@ impl Readouts {
         {
             graph.prefill(secs);
         }
-        let (section, graph_bar, lane_toggles) = graph_section(&graph);
-        section.set_hexpand(true);
-        section.set_vexpand(true);
-
-        // Beside the graph the column scrolls by itself, so the graph keeps
-        // the window's height.
-        let column = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(COLUMN_WIDTH)
-            .child(&left)
-            .build();
-        let body = gtk::Box::builder()
-            .spacing(24)
-            .margin_top(18)
-            .margin_bottom(18)
-            .margin_start(18)
-            .margin_end(18)
-            .build();
-        body.append(&column);
-        body.append(&section);
-        let root = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&body)
-            .build();
+        let (graph_area, graph_bar, lane_toggles) = graph_section(&graph);
+        graph_area.set_hexpand(true);
+        graph_area.set_vexpand(true);
+        graph_area.set_margin_top(12);
+        graph_area.set_margin_bottom(12);
+        graph_area.set_margin_start(12);
+        graph_area.set_margin_end(12);
 
         Self {
-            root,
-            body,
-            column,
+            pane,
+            graph_area,
             panel,
             graph_bar,
             lane_toggles,
@@ -341,7 +313,6 @@ impl Readouts {
             vin,
             temp,
             protection,
-            preset,
             delivered,
             rail,
             last_labels: Cell::new(None),
@@ -349,24 +320,24 @@ impl Readouts {
         }
     }
 
-    /// On a narrow window everything goes in one column, the graph under
-    /// the readouts, and the lane toggles go under the time windows.
+    /// Puts `w` in the panel under the readings, as the running sequence's
+    /// card is.
+    pub fn add_under_readings(&self, w: &impl IsA<gtk::Widget>) {
+        self.pane.insert_child_after(w, Some(&self.panel.root));
+    }
+
+    /// Puts `w` in the panel under the setpoints.
+    pub fn add_under_setpoints(&self, w: &impl IsA<gtk::Widget>) {
+        self.pane
+            .insert_child_after(w, Some(&self.controls.setpoint));
+    }
+
+    /// On a narrow window the lane toggles go under the time windows.
     pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
-        // One column: the readouts, then the graph, scrolling together.
-        let vertical = gtk::Orientation::Vertical.to_value();
-        bp.add_setter(&self.body, "orientation", Some(&vertical));
-        bp.add_setter(&self.body, "margin-start", Some(&12.to_value()));
-        bp.add_setter(&self.body, "margin-end", Some(&12.to_value()));
-        bp.add_setter(&self.column, "width-request", Some(&(-1).to_value()));
-        bp.add_setter(
-            &self.column,
-            "vscrollbar-policy",
-            Some(&gtk::PolicyType::Never.to_value()),
-        );
         bp.add_setter(
             &self.graph_bar,
-            "max-children-per-line",
-            Some(&1u32.to_value()),
+            "orientation",
+            Some(&gtk::Orientation::Vertical.to_value()),
         );
         bp.add_setter(
             &self.lane_toggles,
@@ -464,11 +435,6 @@ impl Readouts {
             .set_label(&format!("limit {}", amps(o.iset_ma)));
         self.protection
             .set_label(&format!("OVP {} · OCP {}", volts(o.ovp_mv), amps(o.ocp_ma)));
-        self.preset.set_label(&if o.index == 0 {
-            "0 (boot default)".to_owned()
-        } else {
-            o.index.to_string()
-        });
     }
 
     pub fn show_energy(&self, mwh: f64, mah: f64) {

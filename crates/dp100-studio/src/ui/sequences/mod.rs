@@ -163,6 +163,12 @@ struct Figure {
 
 pub struct Sequences {
     pub root: Page,
+    /// For the main window's panel while a sequence runs: what it is
+    /// doing, how far along it is, and Stop.
+    pub card: gtk::Box,
+    card_title: gtk::Label,
+    card_now: gtk::Label,
+    card_progress: gtk::ProgressBar,
     columns: Columns,
     /// Beside the steps on a wide window: the step being edited, or a
     /// note saying to pick one.
@@ -211,13 +217,13 @@ impl Sequences {
             .build();
         let run = gtk::Button::builder()
             .child(&run_content)
-            .css_classes(["pill", "run-button"])
+            .css_classes(["pill"])
             .valign(gtk::Align::Center)
             .build();
         let panel = Panel::new(&LAMPS, Some(run.upcast_ref()));
 
         let title = gtk::Label::builder()
-            .css_classes(["seq-title"])
+            .css_classes(["title-1"])
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .xalign(0.0)
             .build();
@@ -261,7 +267,7 @@ impl Sequences {
             .halign(gtk::Align::Start)
             .build();
         let meta = gtk::Label::builder()
-            .css_classes(["channel-note"])
+            .css_classes(["dim-label"])
             .xalign(0.0)
             .wrap(true)
             .build();
@@ -273,14 +279,10 @@ impl Sequences {
         head.append(&meta);
         panel.body.append(&head);
 
-        let progress = gtk::ProgressBar::builder()
-            .css_classes(["headroom", "info"])
-            .visible(false)
-            .build();
+        let progress = gtk::ProgressBar::builder().visible(false).build();
         panel.body.append(&progress);
 
         let foot = footer();
-        foot.add_css_class("compact");
         let mk = |caption: &str, class: &'static str| {
             let (value, b) = figure(caption, class);
             let caption = b
@@ -403,8 +405,58 @@ impl Sequences {
             delete.clone().upcast(),
         ];
 
+        let card_title = gtk::Label::builder()
+            .css_classes(["heading"])
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        let card_now = gtk::Label::builder()
+            .css_classes(["dim-label"])
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        let card_progress = gtk::ProgressBar::new();
+        let card_stop = gtk::Button::builder()
+            .label("Stop")
+            .css_classes(["destructive-action"])
+            .tooltip_text("Stop the Sequence")
+            .build();
+        let card_show = gtk::Button::builder()
+            .label("Show")
+            .action_name("win.page")
+            .action_target(&"sequences".to_variant())
+            .build();
+        let card_buttons = gtk::Box::builder()
+            .spacing(6)
+            .halign(gtk::Align::End)
+            .build();
+        card_buttons.append(&card_show);
+        card_buttons.append(&card_stop);
+        let card_inner = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        card_inner.append(&card_title);
+        card_inner.append(&card_now);
+        card_inner.append(&card_progress);
+        card_inner.append(&card_buttons);
+        let card = gtk::Box::builder()
+            .css_classes(["card"])
+            .visible(false)
+            .build();
+        card.append(&card_inner);
+        card_inner.set_hexpand(true);
+
         let p = Rc::new(Self {
             root,
+            card,
+            card_title,
+            card_now,
+            card_progress,
             columns,
             editor_slot,
             editing: RefCell::new(None),
@@ -514,6 +566,14 @@ impl Sequences {
         let w = Rc::downgrade(&p);
         p.run.connect_clicked(move |_| {
             if let Some(p) = w.upgrade() {
+                p.run_or_stop();
+            }
+        });
+        let w = Rc::downgrade(&p);
+        card_stop.connect_clicked(move |_| {
+            if let Some(p) = w.upgrade()
+                && p.running.get()
+            {
                 p.run_or_stop();
             }
         });
@@ -811,16 +871,9 @@ impl Sequences {
         self.mark_editing();
     }
 
-    /// Highlights the row of the step in the editor.
+    /// Marks the row of the step in the editor.
     fn mark_editing(&self) {
-        let k = self.editing.borrow().as_ref().map(|(k, _, _)| *k);
-        for (i, r) in self.step_rows.borrow().iter().enumerate() {
-            if Some(i) == k {
-                r.add_css_class("editing");
-            } else {
-                r.remove_css_class("editing");
-            }
-        }
+        self.mark_current();
     }
 
     fn step_row(
@@ -849,33 +902,36 @@ impl Sequences {
             .spacing(0)
             .valign(gtk::Align::Fill)
             .build();
-        prefix.append(
-            &gtk::Label::builder()
-                .label((k + 1).to_string())
-                .css_classes(["step-number", "numeric"])
-                .width_chars(2)
-                .xalign(1.0)
-                .valign(gtk::Align::Center)
-                .build(),
-        );
+        // "step-number" marks it for mark_steps; it has no style of its own.
+        let number = gtk::Label::builder()
+            .label((k + 1).to_string())
+            .css_classes(["step-number", "numeric", "dim-label"])
+            .width_chars(2)
+            .xalign(1.0)
+            .margin_end(10)
+            .valign(gtk::Align::Center)
+            .build();
+        prefix.append(&number);
         for _ in 0..depth {
-            prefix.append(&gtk::Box::builder().css_classes(["rail"]).build());
+            // Indented a step for each repeat it is inside.
+            prefix.append(&gtk::Box::builder().width_request(18).build());
         }
         let (legend, class) = chip(step);
         prefix.append(
             &gtk::Label::builder()
                 .label(legend)
-                .css_classes(["lamp", "lit", "step-chip", class])
+                .css_classes(["step-chip", class])
                 .valign(gtk::Align::Center)
-                .width_chars(5)
+                .width_chars(6)
+                .xalign(0.0)
                 .build(),
         );
         row.add_prefix(&prefix);
 
         if report.errors.iter().any(|e| e.step == Some(k)) {
-            row.add_css_class("has-error");
+            number.add_css_class("error");
         } else if report.warnings.iter().any(|e| e.step == Some(k)) {
-            row.add_css_class("has-warning");
+            number.add_css_class("warning");
         }
 
         let tools = gtk::Box::builder()
@@ -930,13 +986,25 @@ impl Sequences {
         row
     }
 
+    /// Marks the step a run is on, or the one in the editor, by its number
+    /// in the accent colour.
     fn mark_current(&self) {
-        let rows = self.step_rows.borrow();
-        for (k, r) in rows.iter().enumerate() {
-            if self.running.get() && Some(k) == self.current.get() {
-                r.add_css_class("current");
+        let current = self.current.get().filter(|_| self.running.get());
+        let editing = self.editing.borrow().as_ref().map(|(k, _, _)| *k);
+        for (k, r) in self.step_rows.borrow().iter().enumerate() {
+            let Some(n) = find_number(r) else { continue };
+            let on = Some(k) == current || Some(k) == editing;
+            for class in ["accent", "heading"] {
+                if on {
+                    n.add_css_class(class);
+                } else {
+                    n.remove_css_class(class);
+                }
+            }
+            if on {
+                n.remove_css_class("dim-label");
             } else {
-                r.remove_css_class("current");
+                n.add_css_class("dim-label");
             }
         }
     }
@@ -995,10 +1063,7 @@ impl Sequences {
         self.panel.lamp(3, !report.errors.is_empty());
 
         let issue = |icon: &str, class: &str, text: &str| {
-            let b = gtk::Box::builder()
-                .spacing(10)
-                .css_classes(["issue", class])
-                .build();
+            let b = gtk::Box::builder().spacing(10).css_classes([class]).build();
             b.append(
                 &gtk::Image::builder()
                     .icon_name(icon)
@@ -1223,6 +1288,7 @@ impl Sequences {
         }
         self.panel.lamp(1, on);
         self.progress.set_visible(on);
+        self.card.set_visible(on);
         // The channel stripes describe the sequence's extent; while running
         // the tiles count time, so they go neutral.
         for f in &self.figures {
@@ -1238,21 +1304,21 @@ impl Sequences {
             self.run_content.set_label("Stop");
             self.run_content
                 .set_icon_name("media-playback-stop-symbolic");
-            self.run.add_css_class("on");
+            self.run.add_css_class("destructive-action");
             self.run.set_sensitive(true);
             self.panel.lamp(0, false);
         } else {
             self.run_content.set_label("Run");
             self.run_content
                 .set_icon_name("media-playback-start-symbolic");
-            self.run.remove_css_class("on");
+            self.run.remove_css_class("destructive-action");
             self.current.set(None);
             self.mark_current();
             self.refresh_checks();
         }
     }
 
-    pub fn show_progress(&self, _name: &str, st: &Status) {
+    pub fn show_progress(&self, name: &str, st: &Status) {
         self.set_running(true);
         self.current.set(Some(st.step));
         self.mark_current();
@@ -1287,11 +1353,16 @@ impl Sequences {
             format!(" · holding {}", crate::ui::controls::watts(w))
         });
         self.meta.set_label(&format!("Now: {now}{holding}"));
+        self.card_title
+            .set_label(&format!("“{name}” · step {} of {}", st.step + 1, st.steps));
+        self.card_now
+            .set_label(&format!("{now}{holding} · {}", clock(st.elapsed)));
         let frac = match self.length.get() {
             Some(total) if !total.is_zero() => st.elapsed.as_secs_f64() / total.as_secs_f64(),
             _ => st.step as f64 / st.steps.max(1) as f64,
         };
         self.progress.set_fraction(frac.clamp(0.0, 1.0));
+        self.card_progress.set_fraction(frac.clamp(0.0, 1.0));
     }
 
     pub fn show_ended(&self, name: &str, outcome: &Outcome) {
@@ -1306,9 +1377,18 @@ impl Sequences {
 
 /// The tools box added as a row suffix, found again to lock it.
 fn find_tools(row: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {
+    find_marked(row, "step-tools")
+}
+
+fn find_number(row: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {
+    find_marked(row, "step-number")
+}
+
+/// The first widget in `row` with `class`, which marks it without styling.
+fn find_marked(row: &impl IsA<gtk::Widget>, class: &str) -> Option<gtk::Widget> {
     let mut stack = vec![row.as_ref().clone()];
     while let Some(w) = stack.pop() {
-        if w.has_css_class("step-tools") {
+        if w.has_css_class(class) {
             return Some(w);
         }
         let mut c = w.first_child();

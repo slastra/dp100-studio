@@ -30,7 +30,7 @@ use sequences::Sequences;
 
 const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap ◀ on its panel";
 
-/// The pages, in switcher order, for Alt+1 to Alt+5.
+/// The pages, for Alt+1 to Alt+5: the main window, then the dialogs.
 const PAGES: [&str; 5] = ["monitor", "presets", "sequences", "log", "device"];
 
 const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -53,11 +53,23 @@ const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
         </child>
         <child>
           <object class="GtkShortcutsGroup">
-            <property name="title">Pages</property>
+            <property name="title">Windows</property>
             <child>
               <object class="GtkShortcutsShortcut">
-                <property name="title">Monitor, Presets, Sequences, Log, Device</property>
-                <property name="accelerator">&lt;Alt&gt;1...&lt;Alt&gt;5</property>
+                <property name="title">Presets, Sequences, Recording, Device</property>
+                <property name="accelerator">&lt;Alt&gt;2...&lt;Alt&gt;5</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Device Settings</property>
+                <property name="accelerator">&lt;Control&gt;comma</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Back to the Graph</property>
+                <property name="accelerator">&lt;Alt&gt;1</property>
               </object>
             </child>
           </object>
@@ -108,23 +120,40 @@ fn window_state_file() -> std::path::PathBuf {
         .join("window")
 }
 
-/// (width, height, maximized) from the last run.
-fn load_window_state() -> Option<(i32, i32, bool)> {
-    let text = std::fs::read_to_string(window_state_file()).ok()?;
-    let mut it = text.split_whitespace();
-    let w = it.next()?.parse().ok()?;
-    let h = it.next()?.parse().ok()?;
-    let m = it.next().is_some_and(|m| m == "1");
-    (w >= 360 && h >= 294).then_some((w, h, m))
+/// The window as it was left: its size, whether it was maximized, and how
+/// wide the panel was.
+struct WindowState {
+    width: i32,
+    height: i32,
+    maximized: bool,
+    panel: Option<i32>,
 }
 
-fn save_window_state(win: &adw::ApplicationWindow) {
+fn load_window_state() -> Option<WindowState> {
+    let text = std::fs::read_to_string(window_state_file()).ok()?;
+    let mut it = text.split_whitespace();
+    let width = it.next()?.parse().ok()?;
+    let height = it.next()?.parse().ok()?;
+    let maximized = it.next().is_some_and(|m| m == "1");
+    let panel = it.next().and_then(|p| p.parse().ok());
+    (width >= 360 && height >= 294).then_some(WindowState {
+        width,
+        height,
+        maximized,
+        panel,
+    })
+}
+
+fn save_window_state(win: &adw::ApplicationWindow, panel: i32) {
     let (w, h) = win.default_size();
     let path = window_state_file();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, format!("{w} {h} {}\n", u8::from(win.is_maximized())));
+    let _ = std::fs::write(
+        path,
+        format!("{w} {h} {} {panel}\n", u8::from(win.is_maximized())),
+    );
 }
 
 /// A simulated unit that looks like a bench in use: output on at 5 V into a
@@ -161,17 +190,20 @@ fn load_css() {
 struct Window {
     ctx: Rc<Ctx>,
     title: adw::WindowTitle,
-    split: adw::OverlaySplitView,
-    sidebar: gtk::ListBox,
-    switcher_bar: adw::ViewSwitcherBar,
-    views: adw::ViewStack,
-    recording_chip: gtk::Label,
-    sequence_chip: gtk::Button,
+    /// The panel of readings and setpoints, and the graph, with a handle
+    /// between them to size the panel.
+    paned: gtk::Paned,
+    /// The panel's width while side by side, to restore it and remember it.
+    panel_width: std::cell::Cell<i32>,
+    /// The device's pages, opened from the main menu.
+    presets_dialog: adw::Dialog,
+    sequences_dialog: adw::Dialog,
+    log_dialog: adw::Dialog,
+    device_dialog: adw::PreferencesDialog,
+    /// A page to open once a DP100 connects (a development hook).
+    open_on_connect: RefCell<Option<String>>,
     /// The device pages are showing (not the status page).
     connected: std::cell::Cell<bool>,
-    /// The window is too narrow for the sidebar; the pages switch from a
-    /// bar at the bottom instead.
-    narrow: std::cell::Cell<bool>,
     banner: adw::Banner,
     stack: gtk::Stack,
     status: adw::StatusPage,
@@ -215,6 +247,7 @@ pub fn activate(app: &adw::Application, simulate: bool) {
     let confirmed = std::cell::Cell::new(false);
     let ui = w.clone();
     w.ctx.window.connect_close_request(move |win| {
+        let panel = ui.panel_width.get();
         // Closing mid-sequence stops it, applying its on_abort, so ask.
         if ui.sequences.is_running() && !confirmed.get() {
             let win = win.clone();
@@ -225,7 +258,7 @@ pub fn activate(app: &adw::Application, simulate: bool) {
                 "Stop and Quit",
                 adw::ResponseAppearance::Destructive,
                 move || {
-                    save_window_state(&win);
+                    save_window_state(&win, panel);
                     let _ = &ui2;
                     win.destroy();
                 },
@@ -243,13 +276,13 @@ pub fn activate(app: &adw::Application, simulate: bool) {
                 "Quit",
                 adw::ResponseAppearance::Destructive,
                 move || {
-                    save_window_state(&win);
+                    save_window_state(&win, panel);
                     win.destroy();
                 },
             );
             return glib::Propagation::Stop;
         }
-        save_window_state(win);
+        save_window_state(win, panel);
         worker.borrow_mut().take();
         glib::Propagation::Proceed
     });
@@ -388,16 +421,17 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
         .parameter_type(Some(glib::VariantTy::STRING))
         .activate(move |_: &adw::ApplicationWindow, _, v| {
             if let Some(name) = v.and_then(|v| v.str()) {
-                ui.views.set_visible_child_name(name);
+                ui.show_page(name);
             }
         })
         .build();
     w.ctx
         .window
         .add_action_entries([off, release, about, close, page]);
+    app.set_accels_for_action("win.page::device", &["<Control>comma", "<Alt>5"]);
     app.set_accels_for_action("win.output-off", &["F9"]);
     app.set_accels_for_action("win.close", &["<Control>w"]);
-    for (k, name) in PAGES.iter().enumerate() {
+    for (k, name) in PAGES.iter().enumerate().take(4) {
         app.set_accels_for_action(&format!("win.page::{name}"), &[&format!("<Alt>{}", k + 1)]);
     }
 
@@ -407,10 +441,10 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
     let show = gio::ActionEntry::builder("show-page")
         .parameter_type(Some(glib::VariantTy::STRING))
         .activate(move |_: &adw::Application, _, v| {
-            if let Some(name) = v.and_then(|v| v.str()) {
-                ui.views.set_visible_child_name(name);
-            }
             ui.ctx.window.present();
+            if let Some(name) = v.and_then(|v| v.str()) {
+                ui.show_page(name);
+            }
         })
         .build();
     app.add_action_entries([show]);
@@ -429,30 +463,60 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
 }
 
 fn install_breakpoint(w: &Rc<Window>) {
+    // A narrow window stacks the panel over the graph.
     let bp = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 760sp").expect("valid condition"),
     );
+    bp.add_setter(
+        &w.paned,
+        "orientation",
+        Some(&gtk::Orientation::Vertical.to_value()),
+    );
+    w.readouts.narrow_layout(&bp);
     let ui = w.clone();
     bp.connect_apply(move |_| {
-        ui.narrow.set(true);
-        ui.update_header();
+        let h = ui.ctx.window.height().max(ui.ctx.window.default_height());
+        ui.paned.set_position(h * 11 / 20);
     });
     let ui = w.clone();
-    bp.connect_unapply(move |_| {
-        ui.narrow.set(false);
-        ui.update_header();
-    });
+    bp.connect_unapply(move |_| ui.paned.set_position(ui.panel_width.get()));
     w.ctx.window.add_breakpoint(bp);
 
-    let views = w.views.clone();
-    w.sequence_chip
-        .connect_clicked(move |_| views.set_visible_child_name("sequences"));
+    // The panel's width, while side by side, is remembered.
     let ui = Rc::downgrade(w);
-    w.views.connect_visible_child_name_notify(move |_| {
-        if let Some(ui) = ui.upgrade() {
-            ui.update_header();
+    w.paned.connect_position_notify(move |p| {
+        if let Some(ui) = ui.upgrade()
+            && p.orientation() == gtk::Orientation::Horizontal
+            && p.position() > 0
+        {
+            ui.panel_width.set(p.position());
         }
     });
+
+    // Dialogs adapt to their own width.
+    let bp = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("max-width: 560sp").expect("valid condition"),
+    );
+    w.device.narrow_layout(&bp);
+    w.device_dialog.add_breakpoint(bp);
+}
+
+/// A dialog for one of the device's pages, with a header to close it by.
+fn page_dialog(
+    title: &str,
+    content: &impl IsA<gtk::Widget>,
+    width: i32,
+    height: i32,
+) -> adw::Dialog {
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(content));
+    adw::Dialog::builder()
+        .title(title)
+        .content_width(width)
+        .content_height(height)
+        .child(&view)
+        .build()
 }
 
 fn build(
@@ -472,9 +536,10 @@ fn build(
         .width_request(360)
         .height_request(294)
         .build();
-    if let Some((w, h, maximized)) = load_window_state() {
-        window.set_default_size(w, h);
-        if maximized {
+    let saved = load_window_state();
+    if let Some(st) = &saved {
+        window.set_default_size(st.width, st.height);
+        if st.maximized {
             window.maximize();
         }
     }
@@ -484,23 +549,13 @@ fn build(
     let title = adw::WindowTitle::new("DP100 Studio", "");
     let header = adw::HeaderBar::builder().title_widget(&title).build();
 
-    let recording_chip = gtk::Label::builder()
-        .label("REC")
-        .css_classes(["recording-chip"])
-        .tooltip_text("Recording to a File")
-        .visible(false)
-        .build();
-    header.pack_start(&recording_chip);
-    let sequence_chip = gtk::Button::builder()
-        .label("SEQ")
-        .css_classes(["sequence-chip"])
-        .tooltip_text("Show the Running Sequence")
-        .valign(gtk::Align::Center)
-        .visible(false)
-        .build();
-    header.pack_start(&sequence_chip);
-
     let menu = gio::Menu::new();
+    let pages_section = gio::Menu::new();
+    pages_section.append(Some("_Presets"), Some("win.page::presets"));
+    pages_section.append(Some("_Sequences"), Some("win.page::sequences"));
+    pages_section.append(Some("_Recording"), Some("win.page::log"));
+    pages_section.append(Some("_Device Settings"), Some("win.page::device"));
+    menu.append_section(None, &pages_section);
     let device_section = gio::Menu::new();
     device_section.append(Some("Turn Output _Off"), Some("win.output-off"));
     device_section.append(Some("_Release Front Panel"), Some("win.release"));
@@ -558,9 +613,27 @@ fn build(
     let device = Device::new(ctx.clone(), simulated);
     let log = Log::new(ctx.clone());
     let sequences = Sequences::new(ctx.clone());
+    header.pack_end(&log.header_record);
 
-    // Each page lays itself out by the width it gets, which beside the
-    // sidebar is less than the window's.
+    // The panel: readings and setpoints, a running sequence, the preset.
+    readouts.add_under_readings(&sequences.card);
+    readouts.add_under_setpoints(&presets.recall);
+    let panel = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .width_request(readouts::PANEL_WIDTH)
+        .child(&readouts.pane)
+        .build();
+    let panel_width = saved.as_ref().and_then(|s| s.panel).unwrap_or(400);
+    let paned = gtk::Paned::builder()
+        .start_child(&panel)
+        .end_child(&readouts.graph_area)
+        .resize_start_child(false)
+        .shrink_start_child(false)
+        .shrink_end_child(false)
+        .position(panel_width)
+        .build();
+
+    // Each dialog's page lays itself out by the width it gets.
     let page = |child: &gtk::Widget, narrow_below: &str| {
         let bin = adw::BreakpointBin::builder()
             .width_request(340)
@@ -574,113 +647,47 @@ fn build(
         bin.add_breakpoint(bp.clone());
         (bin, bp)
     };
-    let (monitor_page, bp) = page(readouts.root.upcast_ref(), "820sp");
-    readouts.narrow_layout(&bp);
     let (presets_page, bp) = page(presets.root.widget().upcast_ref(), "600sp");
     presets.narrow_layout(&bp);
     let (sequences_page, bp) = page(sequences.root.widget().upcast_ref(), "700sp");
     sequences.narrow_layout(&bp);
     let (log_page, bp) = page(log.root.widget().upcast_ref(), "600sp");
     log.narrow_layout(&bp);
-    let (device_page, bp) = page(device.root.widget().upcast_ref(), "700sp");
-    device.narrow_layout(&bp);
-
-    let views = adw::ViewStack::new();
-    views.add_titled_with_icon(
-        &monitor_page,
-        Some("monitor"),
-        "Monitor",
-        "utilities-system-monitor-symbolic",
-    );
-    views.add_titled_with_icon(
-        &presets_page,
-        Some("presets"),
-        "Presets",
-        "view-list-symbolic",
-    );
-    views.add_titled_with_icon(
-        &sequences_page,
-        Some("sequences"),
-        "Sequences",
-        "media-playlist-repeat-symbolic",
-    );
-    views.add_titled_with_icon(&log_page, Some("log"), "Log", "media-record-symbolic");
-    views.add_titled_with_icon(
-        &device_page,
-        Some("device"),
-        "Device",
-        "preferences-system-symbolic",
-    );
-    // A development hook for screenshots: start on another page.
-    if let Ok(name) = std::env::var("DP100_STUDIO_PAGE") {
-        views.set_visible_child_name(&name);
-    }
-
-    // The pages, down the side as a desktop app has them.
-    let sidebar = gtk::ListBox::builder()
-        .css_classes(["navigation-sidebar"])
+    let presets_dialog = page_dialog("Presets", &presets_page, 860, 720);
+    let sequences_dialog = page_dialog("Sequences", &sequences_page, 1100, 800);
+    let log_dialog = page_dialog("Recording", &log_page, 760, 560);
+    let device_dialog = adw::PreferencesDialog::builder()
+        .title("Device Settings")
+        .width_request(340)
+        .height_request(294)
         .build();
-    for name in PAGES {
-        let page = views.page(
-            &views
-                .child_by_name(name)
-                .expect("every page is in the stack"),
-        );
-        let row = gtk::Box::builder().spacing(12).build();
-        row.append(&gtk::Image::from_icon_name(
-            &page.icon_name().unwrap_or_default(),
-        ));
-        row.append(&gtk::Label::new(page.title().as_deref()));
-        sidebar.append(&row);
-    }
-    let pages = views.clone();
-    sidebar.connect_row_selected(move |_, row| {
-        if let Some(r) = row {
-            pages.set_visible_child_name(PAGES[r.index() as usize]);
-        }
-    });
-    let side_header = adw::HeaderBar::builder()
-        .title_widget(&adw::WindowTitle::new("DP100 Studio", ""))
-        .build();
-    let side = adw::ToolbarView::new();
-    side.add_top_bar(&side_header);
-    side.set_content(Some(&sidebar));
-
-    // On a narrow window the sidebar folds away and the pages switch from a
-    // bar at the bottom, as GNOME apps do.
-    let switcher_bar = adw::ViewSwitcherBar::builder().stack(&views).build();
+    device_dialog.add(&device.root);
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
     stack.add_named(&status, Some("status"));
-    stack.add_named(&views, Some("device"));
+    stack.add_named(&paned, Some("device"));
 
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
     view.add_top_bar(&banner);
-    view.add_bottom_bar(&switcher_bar);
     view.set_content(Some(&stack));
-
-    let split = adw::OverlaySplitView::builder()
-        .sidebar(&side)
-        .content(&view)
-        .max_sidebar_width(220.0)
-        .build();
-    toasts.set_child(Some(&split));
+    toasts.set_child(Some(&view));
     window.set_content(Some(&toasts));
 
     Window {
         ctx,
         title,
-        split,
-        sidebar,
-        switcher_bar,
-        views,
-        recording_chip,
-        sequence_chip,
+        paned,
+        panel_width: std::cell::Cell::new(panel_width),
+        presets_dialog,
+        sequences_dialog,
+        log_dialog,
+        device_dialog,
+        // A development hook for screenshots: open a page once connected.
+        open_on_connect: RefCell::new(std::env::var("DP100_STUDIO_PAGE").ok()),
         connected: std::cell::Cell::new(false),
-        narrow: std::cell::Cell::new(false),
         banner,
         stack,
         status,
@@ -707,47 +714,38 @@ impl Window {
         self.reconnect.set_visible(false);
         self.setup_help.set_visible(false);
         self.set_banner(None, false);
-        self.title
-            .set_subtitle(if self.simulated { "Simulated" } else { "" });
         self.connected.set(false);
         self.update_header();
+        if let Some(open) = self.ctx.window.visible_dialog() {
+            open.close();
+        }
         self.stack.set_visible_child_name("status");
     }
 
-    /// The sidebar shows when there is room and a device to switch between
-    /// pages of, and the header names the page it is on. Otherwise the
-    /// header shows the app's name, and a narrow window switches pages from
-    /// the bar at the bottom.
+    /// The header names the app, and says when the DP100 is simulated.
     fn update_header(&self) {
-        let (connected, narrow) = (self.connected.get(), self.narrow.get());
-        // Never collapsed while showing, which would open it over the page.
-        if narrow {
-            self.split.set_show_sidebar(false);
-            self.split.set_collapsed(true);
-        } else {
-            self.split.set_collapsed(false);
-            self.split.set_show_sidebar(true);
-        }
-        // There are no pages to go to until a DP100 is connected.
-        self.sidebar.set_sensitive(connected);
-        self.switcher_bar.set_reveal(connected && narrow);
-        let page = self
-            .views
-            .visible_child()
-            .map(|c| self.views.page(&c))
-            .filter(|_| connected && !narrow);
-        let title = page.and_then(|p| p.title());
         self.title
-            .set_title(title.as_deref().unwrap_or("DP100 Studio"));
-        let name = self.views.visible_child_name();
-        let index = PAGES.iter().position(|p| Some(*p) == name.as_deref());
-        let selected = self.sidebar.selected_row().map(|r| r.index() as usize);
-        if index != selected {
-            self.sidebar.select_row(
-                index
-                    .and_then(|i| self.sidebar.row_at_index(i as i32))
-                    .as_ref(),
-            );
+            .set_subtitle(if self.simulated { "Simulated" } else { "" });
+    }
+
+    /// Opens one of the device's pages: a dialog, or for "monitor", the main
+    /// window with no dialog over it.
+    fn show_page(&self, name: &str) {
+        if !self.connected.get() {
+            return;
+        }
+        if let Some(open) = self.ctx.window.visible_dialog() {
+            open.close();
+        }
+        let dialog: Option<&adw::Dialog> = match name {
+            "presets" => Some(&self.presets_dialog),
+            "sequences" => Some(&self.sequences_dialog),
+            "log" => Some(&self.log_dialog),
+            "device" => Some(self.device_dialog.upcast_ref()),
+            _ => None,
+        };
+        if let Some(d) = dialog {
+            d.present(Some(&self.ctx.window));
         }
     }
 
@@ -827,6 +825,9 @@ impl Window {
                 self.device.show_output(&s.output);
                 self.device.show_system(&s.system);
                 self.stack.set_visible_child_name("device");
+                if let Some(name) = self.open_on_connect.take() {
+                    self.show_page(&name);
+                }
             }
             Event::Sample(s) => {
                 let m = s.m;
@@ -876,8 +877,8 @@ impl Window {
                 self.device.show_output(&o);
             }
             Event::Presets(p) => {
+                self.ctx.live.borrow_mut().presets = p.clone();
                 self.presets.show_presets(&p);
-                self.ctx.live.borrow_mut().presets = p;
             }
             Event::System(s) => {
                 self.ctx.live.borrow_mut().system = Some(s);
@@ -893,14 +894,12 @@ impl Window {
                 self.log.show_energy(mwh, mah, covered, gaps);
             }
             Event::Recording(r) => {
-                self.recording_chip.set_visible(true);
                 if !self.recording.replace(true) {
                     self.update_inhibit();
                 }
                 self.log.show_recording(&r);
             }
             Event::RecordingStopped(r) => {
-                self.recording_chip.set_visible(false);
                 self.recording.set(false);
                 self.update_inhibit();
                 if let Err(e) = &r {
@@ -909,9 +908,6 @@ impl Window {
                 self.log.show_stopped(&r);
             }
             Event::Sequence { name, status } => {
-                self.sequence_chip
-                    .set_label(&format!("SEQ {}/{}", status.step + 1, status.steps));
-                self.sequence_chip.set_visible(true);
                 self.readouts.set_locked(true);
                 let was_running = self.sequences.is_running();
                 self.sequences.show_progress(&name, &status);
@@ -920,7 +916,6 @@ impl Window {
                 }
             }
             Event::SequenceEnded { name, outcome } => {
-                self.sequence_chip.set_visible(false);
                 self.readouts.set_locked(false);
                 self.sequences.show_ended(&name, &outcome);
                 self.update_inhibit();

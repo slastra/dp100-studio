@@ -101,7 +101,7 @@ impl Controls {
             .tooltip_text("Hold a Constant Power")
             .build();
         let modes = gtk::Box::builder()
-            .css_classes(["segmented"])
+            .css_classes(["linked"])
             .valign(gtk::Align::Center)
             .build();
         modes.append(&by_voltage);
@@ -122,7 +122,7 @@ impl Controls {
             .build();
         let toggle = gtk::Button::builder()
             .child(&toggle_content)
-            .css_classes(["pill", "power-button"])
+            .css_classes(["pill"])
             .valign(gtk::Align::Center)
             .tooltip_text("Turn the Output On")
             .build();
@@ -433,12 +433,12 @@ impl Controls {
             self.on.set(on);
             if on {
                 self.toggle_content.set_label("Turn Off");
-                self.toggle.add_css_class("on");
+                self.toggle.add_css_class("destructive-action");
                 self.toggle
                     .set_tooltip_text(Some("Turn the Output Off (F9)"));
             } else {
                 self.toggle_content.set_label("Turn On");
-                self.toggle.remove_css_class("on");
+                self.toggle.remove_css_class("destructive-action");
                 self.toggle.set_tooltip_text(Some("Turn the Output On"));
             }
         }

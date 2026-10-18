@@ -51,6 +51,10 @@ fn thousands(n: u64) -> String {
 
 pub struct Log {
     pub root: Page,
+    /// Record in the main window's header: the same as the page's, showing
+    /// how long the recording has run.
+    pub header_record: gtk::Button,
+    header_content: adw::ButtonContent,
     panel: Panel,
     record: gtk::Button,
     record_content: adw::ButtonContent,
@@ -77,7 +81,7 @@ impl Log {
             .build();
         let record = gtk::Button::builder()
             .child(&record_content)
-            .css_classes(["pill", "record-button"])
+            .css_classes(["pill"])
             .valign(gtk::Align::Center)
             .tooltip_text("Record Every Measurement to a File")
             .build();
@@ -87,12 +91,12 @@ impl Log {
         );
         let title = gtk::Label::builder()
             .label("Not recording")
-            .css_classes(["seq-title"])
+            .css_classes(["title-1"])
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build();
         let meta = gtk::Label::builder()
-            .css_classes(["channel-note"])
+            .css_classes(["dim-label"])
             .xalign(0.0)
             .wrap(true)
             .build();
@@ -122,7 +126,7 @@ impl Log {
         since.append(
             &gtk::Label::builder()
                 .label("Delivered since connecting, integrated from the measurements")
-                .css_classes(["channel-note"])
+                .css_classes(["dim-label"])
                 .xalign(0.0)
                 .hexpand(true)
                 .wrap(true)
@@ -169,8 +173,19 @@ impl Log {
         rg.add(&file);
         root.add(&rg);
 
+        let header_content = adw::ButtonContent::builder()
+            .icon_name("media-record-symbolic")
+            .label("Record")
+            .build();
+        let header_record = gtk::Button::builder()
+            .child(&header_content)
+            .tooltip_text("Record Every Measurement to a File")
+            .build();
+
         let l = Rc::new(Self {
             root,
+            header_record,
+            header_content,
             panel,
             record,
             record_content,
@@ -195,19 +210,14 @@ impl Log {
                 l.show_idle();
             }
         });
-        let w = Rc::downgrade(&l);
-        l.record.connect_clicked(move |_| {
-            if let Some(l) = w.upgrade() {
-                if l.recording.get() {
-                    l.ctx.command(Command::StopRecording);
-                } else {
-                    l.ctx.command(Command::StartRecording {
-                        rate_hz: l.rate_hz(),
-                        dir: sessions_dir(),
-                    });
+        for b in [&l.record, &l.header_record] {
+            let w = Rc::downgrade(&l);
+            b.connect_clicked(move |_| {
+                if let Some(l) = w.upgrade() {
+                    l.toggle();
                 }
-            }
-        });
+            });
+        }
         let ctx = l.ctx.clone();
         reset.connect_clicked(move |_| ctx.command(Command::ResetEnergy));
         let w = Rc::downgrade(&l);
@@ -252,6 +262,17 @@ impl Log {
         }
     }
 
+    fn toggle(&self) {
+        if self.recording.get() {
+            self.ctx.command(Command::StopRecording);
+        } else {
+            self.ctx.command(Command::StartRecording {
+                rate_hz: self.rate_hz(),
+                dir: sessions_dir(),
+            });
+        }
+    }
+
     fn set_recording(&self, on: bool) {
         if self.recording.replace(on) == on {
             return;
@@ -262,11 +283,20 @@ impl Log {
             self.record_content.set_label("Stop");
             self.record_content
                 .set_icon_name("media-playback-stop-symbolic");
-            self.record.add_css_class("recording");
+            self.record.add_css_class("destructive-action");
+            self.header_record.add_css_class("destructive-action");
+            self.header_content
+                .set_icon_name("media-playback-stop-symbolic");
+            self.header_record.set_tooltip_text(Some("Stop Recording"));
         } else {
             self.record_content.set_label("Record");
             self.record_content.set_icon_name("media-record-symbolic");
-            self.record.remove_css_class("recording");
+            self.record.remove_css_class("destructive-action");
+            self.header_record.remove_css_class("destructive-action");
+            self.header_content.set_icon_name("media-record-symbolic");
+            self.header_content.set_label("Record");
+            self.header_record
+                .set_tooltip_text(Some("Record Every Measurement to a File"));
             self.show_idle();
         }
     }
@@ -293,6 +323,7 @@ impl Log {
             .unwrap_or_default();
         self.title
             .set_label(&format!("Recording · {}", clock(r.elapsed)));
+        self.header_content.set_label(&clock(r.elapsed));
         self.meta.set_label(&format!(
             "{name} · {} rows · {} and {} so far",
             thousands(r.rows),
