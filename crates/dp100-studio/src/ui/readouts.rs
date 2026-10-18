@@ -315,7 +315,7 @@ impl Readouts {
 
         pane.append(&controls.setpoint);
 
-        let output = adw::PreferencesGroup::builder().title("Details").build();
+        let output = adw::PreferencesGroup::new();
         let protection = row(&output, "Protection trips");
         let delivered = row(&output, "Delivered since connecting");
         let rail = row(&output, "Internal 5 V rail");

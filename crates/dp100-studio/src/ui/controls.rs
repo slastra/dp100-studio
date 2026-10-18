@@ -43,6 +43,8 @@ enum Mode {
 
 pub struct Controls {
     pub setpoint: adw::PreferencesGroup,
+    /// The first row: the mode, its note, and the switch between them.
+    mode_row: adw::ActionRow,
     /// What the output is doing, in words, at the top of the group.
     status: adw::ActionRow,
     status_icon: gtk::Image,
@@ -115,11 +117,15 @@ impl Controls {
         modes.append(&by_voltage);
         modes.append(&by_power);
 
-        let setpoint = adw::PreferencesGroup::builder()
-            .title("Setpoint")
-            .description(VOLTAGE_NOTE)
-            .header_suffix(&modes)
+        // All in the card: the mode and its switch, what the output is
+        // doing, then the values.
+        let mode_row = adw::ActionRow::builder()
+            .title("Mode")
+            .subtitle(VOLTAGE_NOTE)
             .build();
+        mode_row.add_suffix(&modes);
+        let setpoint = adw::PreferencesGroup::new();
+        setpoint.add(&mode_row);
         let status_icon = gtk::Image::builder()
             .icon_name("system-shutdown-symbolic")
             .css_classes(["dim-label"])
@@ -149,6 +155,7 @@ impl Controls {
 
         let c = Rc::new(Self {
             setpoint,
+            mode_row,
             status,
             status_icon,
             status_spinner,
@@ -346,8 +353,8 @@ impl Controls {
         self.p.set_visible(power);
         self.v
             .set_title(if power { "Voltage limit" } else { "Voltage" });
-        self.setpoint
-            .set_description(Some(if power { POWER_NOTE } else { VOLTAGE_NOTE }));
+        self.mode_row
+            .set_subtitle(if power { POWER_NOTE } else { VOLTAGE_NOTE });
         self.syncing.set(false);
         self.show_status();
     }
