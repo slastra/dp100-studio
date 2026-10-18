@@ -265,6 +265,9 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 /// the graph.
 pub const PANEL_WIDTH: i32 = 340;
 pub const PANEL_MAX_WIDTH: i32 = 480;
+/// The inset of the panel and the graph from the window's edges and the
+/// handle between them.
+const GUTTER: i32 = 12;
 
 pub struct Readouts {
     /// The panel's contents: lamps and readings, setpoints, details.
@@ -290,13 +293,15 @@ pub struct Readouts {
 
 impl Readouts {
     pub fn new(controls: Rc<Controls>) -> Self {
+        // The same inset as the graph's, so the two line up across the
+        // handle.
         let pane = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(24)
-            .margin_top(18)
-            .margin_bottom(18)
-            .margin_start(18)
-            .margin_end(18)
+            .margin_top(GUTTER)
+            .margin_bottom(GUTTER)
+            .margin_start(GUTTER)
+            .margin_end(GUTTER)
             .build();
 
         // --- the instrument panel, laid out for a column ---
@@ -345,10 +350,10 @@ impl Readouts {
         let (graph_area, graph_bar, lane_toggles) = graph_section(&graph);
         graph_area.set_hexpand(true);
         graph_area.set_vexpand(true);
-        graph_area.set_margin_top(12);
-        graph_area.set_margin_bottom(12);
-        graph_area.set_margin_start(12);
-        graph_area.set_margin_end(12);
+        graph_area.set_margin_top(GUTTER);
+        graph_area.set_margin_bottom(GUTTER);
+        graph_area.set_margin_start(GUTTER);
+        graph_area.set_margin_end(GUTTER);
 
         Self {
             pane,
