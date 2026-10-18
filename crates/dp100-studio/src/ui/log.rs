@@ -68,7 +68,7 @@ pub struct Log {
 
 impl Log {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = Page::new();
+        let root = Page::wide();
 
         // --- the panel: recording state, Record, and what was delivered ---
         let record_content = adw::ButtonContent::builder()

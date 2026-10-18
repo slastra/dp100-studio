@@ -155,7 +155,7 @@ pub struct Presets {
 
 impl Presets {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = Page::new();
+        let root = Page::wide();
 
         // --- the panel: a memory lamp per preset, the active one lit ---
         let lamps: Vec<(String, String)> = (1..=9)

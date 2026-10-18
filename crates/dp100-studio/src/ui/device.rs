@@ -9,7 +9,7 @@ use dp100::{BasicInfo, DeviceInfo, Setpoints, SystemSettings};
 use gtk::glib;
 
 use super::ctx::{Ctx, milli, volts};
-use super::page::Page;
+use super::page::{Columns, Page};
 use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
@@ -95,6 +95,7 @@ fn spin(title: &str, subtitle: &str, min: f64, max: f64, step: f64, digits: u32)
 
 pub struct Device {
     pub root: Page,
+    columns: Columns,
     protection: Rc<Form>,
     ovp: adw::SpinRow,
     ocp: adw::SpinRow,
@@ -135,7 +136,7 @@ const LAMPS: [(&str, &str, Tone); 3] = [
 
 impl Device {
     pub fn new(ctx: Rc<Ctx>, simulated: bool) -> Rc<Self> {
-        let root = Page::new();
+        let root = Page::wide();
 
         // --- the unit, as a panel ---
         let release = gtk::Button::builder()
@@ -183,6 +184,7 @@ impl Device {
         let hg = adw::PreferencesGroup::new();
         hg.add(&panel.root);
         root.add(&hg);
+        let columns = Columns::new(&root);
 
         let protection = Form::new("Save the Trips to the Active Preset");
         let pg = adw::PreferencesGroup::builder()
@@ -197,7 +199,7 @@ impl Device {
         let ocp = spin("Over-current trip (A)", "", 0.0, 5.05, 0.001, 3);
         pg.add(&ovp);
         pg.add(&ocp);
-        root.add(&pg);
+        columns.left.append(&pg);
 
         let system = Form::new("Save These Settings to the DP100");
         let sg = adw::PreferencesGroup::builder()
@@ -220,7 +222,7 @@ impl Device {
         }
         sg.add(&rpp);
         sg.add(&auto_on);
-        root.add(&sg);
+        columns.right.append(&sg);
 
         for r in [&ovp, &ocp] {
             protection.watch(r, "value");
@@ -234,6 +236,7 @@ impl Device {
 
         let d = Rc::new(Self {
             root,
+            columns,
             protection,
             ovp,
             ocp,
@@ -365,6 +368,7 @@ impl Device {
     pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
         self.panel
             .narrow_layout(bp, Some(self.release.upcast_ref()));
+        self.columns.narrow_layout(bp);
     }
 
     pub fn show_output(&self, o: &Setpoints) {
