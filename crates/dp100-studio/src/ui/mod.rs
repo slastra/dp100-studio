@@ -160,16 +160,17 @@ fn load_css() {
 
 struct Window {
     ctx: Rc<Ctx>,
-    header: adw::HeaderBar,
     title: adw::WindowTitle,
-    switcher: adw::ViewSwitcher,
+    split: adw::OverlaySplitView,
+    sidebar: gtk::ListBox,
     switcher_bar: adw::ViewSwitcherBar,
     views: adw::ViewStack,
     recording_chip: gtk::Label,
     sequence_chip: gtk::Button,
     /// The device pages are showing (not the status page).
     connected: std::cell::Cell<bool>,
-    /// The window is too narrow for the switcher in the header.
+    /// The window is too narrow for the sidebar; the pages switch from a
+    /// bar at the bottom instead.
     narrow: std::cell::Cell<bool>,
     banner: adw::Banner,
     stack: gtk::Stack,
@@ -450,6 +451,12 @@ fn install_breakpoint(w: &Rc<Window>) {
     let views = w.views.clone();
     w.sequence_chip
         .connect_clicked(move |_| views.set_visible_child_name("sequences"));
+    let ui = Rc::downgrade(w);
+    w.views.connect_visible_child_name_notify(move |_| {
+        if let Some(ui) = ui.upgrade() {
+            ui.update_header();
+        }
+    });
 }
 
 fn build(
@@ -591,12 +598,39 @@ fn build(
     if let Ok(name) = std::env::var("DP100_STUDIO_PAGE") {
         views.set_visible_child_name(&name);
     }
-    let switcher = adw::ViewSwitcher::builder()
-        .stack(&views)
-        .policy(adw::ViewSwitcherPolicy::Wide)
+
+    // The pages, down the side as a desktop app has them.
+    let sidebar = gtk::ListBox::builder()
+        .css_classes(["navigation-sidebar"])
         .build();
-    // On a narrow window the page switcher moves to the bottom, as GNOME
-    // apps do, rather than squeezing labels into the header.
+    for name in PAGES {
+        let page = views.page(
+            &views
+                .child_by_name(name)
+                .expect("every page is in the stack"),
+        );
+        let row = gtk::Box::builder().spacing(12).build();
+        row.append(&gtk::Image::from_icon_name(
+            &page.icon_name().unwrap_or_default(),
+        ));
+        row.append(&gtk::Label::new(page.title().as_deref()));
+        sidebar.append(&row);
+    }
+    let pages = views.clone();
+    sidebar.connect_row_selected(move |_, row| {
+        if let Some(r) = row {
+            pages.set_visible_child_name(PAGES[r.index() as usize]);
+        }
+    });
+    let side_header = adw::HeaderBar::builder()
+        .title_widget(&adw::WindowTitle::new("DP100 Studio", ""))
+        .build();
+    let side = adw::ToolbarView::new();
+    side.add_top_bar(&side_header);
+    side.set_content(Some(&sidebar));
+
+    // On a narrow window the sidebar folds away and the pages switch from a
+    // bar at the bottom, as GNOME apps do.
     let switcher_bar = adw::ViewSwitcherBar::builder().stack(&views).build();
 
     let stack = gtk::Stack::builder()
@@ -604,20 +638,27 @@ fn build(
         .build();
     stack.add_named(&status, Some("status"));
     stack.add_named(&views, Some("device"));
-    toasts.set_child(Some(&stack));
 
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
     view.add_top_bar(&banner);
     view.add_bottom_bar(&switcher_bar);
-    view.set_content(Some(&toasts));
-    window.set_content(Some(&view));
+    view.set_content(Some(&stack));
+
+    let split = adw::OverlaySplitView::builder()
+        .sidebar(&side)
+        .content(&view)
+        .max_sidebar_width(220.0)
+        .show_sidebar(false)
+        .build();
+    toasts.set_child(Some(&split));
+    window.set_content(Some(&toasts));
 
     Window {
         ctx,
-        header,
         title,
-        switcher,
+        split,
+        sidebar,
         switcher_bar,
         views,
         recording_chip,
@@ -657,16 +698,39 @@ impl Window {
         self.stack.set_visible_child_name("status");
     }
 
-    /// The switcher goes in the header when there is room and a device to
-    /// switch between pages of; otherwise the header shows the app's name.
+    /// The sidebar shows when there is room and a device to switch between
+    /// pages of, and the header names the page it is on. Otherwise the
+    /// header shows the app's name, and a narrow window switches pages from
+    /// the bar at the bottom.
     fn update_header(&self) {
         let (connected, narrow) = (self.connected.get(), self.narrow.get());
-        if connected && !narrow {
-            self.header.set_title_widget(Some(&self.switcher));
+        // Never collapsed while showing, which would open it over the page.
+        if narrow {
+            self.split.set_show_sidebar(false);
+            self.split.set_collapsed(true);
         } else {
-            self.header.set_title_widget(Some(&self.title));
+            self.split.set_collapsed(false);
+            self.split.set_show_sidebar(connected);
         }
         self.switcher_bar.set_reveal(connected && narrow);
+        let page = self
+            .views
+            .visible_child()
+            .map(|c| self.views.page(&c))
+            .filter(|_| connected && !narrow);
+        let title = page.and_then(|p| p.title());
+        self.title
+            .set_title(title.as_deref().unwrap_or("DP100 Studio"));
+        let name = self.views.visible_child_name();
+        let index = PAGES.iter().position(|p| Some(*p) == name.as_deref());
+        let selected = self.sidebar.selected_row().map(|r| r.index() as usize);
+        if index != selected {
+            self.sidebar.select_row(
+                index
+                    .and_then(|i| self.sidebar.row_at_index(i as i32))
+                    .as_ref(),
+            );
+        }
     }
 
     fn set_banner(&self, text: Option<&str>, clear_button: bool) {
