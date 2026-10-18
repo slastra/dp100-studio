@@ -11,21 +11,28 @@ are all the same unit.
 
 ## Features
 
-- **Monitor**: live voltage, current and power, with lamps for CV, CC, the
-  output and every protection trip, and a graph of up to an hour at 100
-  samples a second that keeps every spike visible at any zoom.
-- **Control**: setpoints that apply as you change them, an output switch that
-  asks before turning on (F9 turns it off from anywhere), and protection
-  limits.
+- **The graph** fills the window: voltage, current, power and temperature,
+  up to an hour at 100 samples a second, keeping every spike visible at any
+  zoom.
+- **One panel** beside it, as wide as you drag it: the voltage and current
+  on seven-segment readings in the DP100's own colours, lamps for CV, CC,
+  CP, the output and every protection trip, and what the output is doing in
+  words.
+- **Control**: setpoints that apply as you change them, and Turn On beside
+  Record in the header, which asks before it turns the output on (F9 turns
+  it off from anywhere).
 - **Constant power**, which the DP100 can't do by itself: the app holds a
   power by adjusting the current limit, within a voltage and current limit
   you set.
-- **Presets**: edit and recall the supply's nine memories.
 - **Sequences**: steps such as ramps, waits, and waiting for a measurement to
-  meet a condition, checked against the supply's limits before they run.
-- **Log**: record every measurement to CSV, with energy and charge delivered.
-- **Device**: panel, safety and protection settings, and a button to hand the
-  front panel back to the DP100.
+  meet a condition, picked and run from the panel and checked against the
+  supply's limits before they run.
+- **Presets**: recall one of the supply's nine memories from the panel, or
+  edit them.
+- **Recording** every measurement to CSV, from Record in the header, with
+  the energy and charge delivered.
+- **Device settings**: panel, safety and protection settings, and a button to
+  hand the front panel back to the DP100.
 - A `dp100` command-line tool and a Rust library for the protocol.
 
 <p>
@@ -73,8 +80,8 @@ Only one program can talk to the DP100 at a time, so the app waits while
 another has it and connects as soon as it is free.
 
 While the app is connected, the DP100's own buttons are locked; the firmware
-does this whenever a computer is polling it. **Release Panel** on the Device
-page hands the panel back, and **Reconnect** takes it again.
+does this whenever a computer is polling it. **Release Panel** in Device
+Settings (Ctrl+,) hands the panel back, and **Reconnect** takes it again.
 
 The DP100 can only output a little less than its input. On a 9 V USB-C
 charger that's about 8.8 V. A 20 V PD charger gives about 19.7 V, and the full
@@ -87,8 +94,13 @@ on or off, wait, ramp a setpoint (smoothly, or in exact steps like the
 DP100's own scan mode), hold a constant power, wait until a measurement
 meets a condition (say, current below 50 mA for 30 s), and repeat blocks.
 A power step keeps holding through the steps after it, so "hold 2 W until
-the temperature reaches 60 °C" is a power step and a wait-until. They're edited on the
-Sequences page and stored as TOML; see
+the temperature reaches 60 °C" is a power step and a wait-until.
+
+The Sequence card in the panel picks one of your sequences, says whether it
+can run, and runs it, following each step as it goes. **Edit** opens it to
+change: each step opens in place, and dragging a step's handle moves it. The
+card's menu makes, copies, imports, exports and deletes them. Each is a TOML
+file in `~/.local/share/dp100-studio/sequences`; see
 [examples/sequences](examples/sequences) for the format.
 
 Before a run, every step is checked against the DP100's protection trips,

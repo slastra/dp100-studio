@@ -120,6 +120,18 @@ if [ -n "${SHOT_WTYPE:-}" ]; then
     # SHOT_AFTER: seconds to let the typing take effect before the capture.
     sleep "${SHOT_AFTER:-0.6}"
 fi
+# SHOT_SCROLL_AFTER="X Y DY" scrolls again after the clicks and typing (say,
+# back to the top once a run has started).
+if [ -n "${SHOT_SCROLL_AFTER:-}" ]; then
+    read -r SX SY SDY <<<"$SHOT_SCROLL_AFTER"
+    # Pinned to the corner first, so the move is to an absolute position.
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move -10000 -10000
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move "$SX" "$SY"
+    sleep 0.3
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer scroll "$SDY" 0
+fi
+# SHOT_WAIT: seconds to wait before the capture, say for a graph to fill.
+sleep "${SHOT_WAIT:-0}"
 GEOM=()
 [ -n "${SHOT_WINDOW:-}" ] && GEOM=(-g "0,0 $SHOT_WINDOW")
 XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" grim "${GEOM[@]}" "$OUT" || { cat "$RT/app.log" >&2; exit 1; }

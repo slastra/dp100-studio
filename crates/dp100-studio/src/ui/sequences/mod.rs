@@ -1268,9 +1268,12 @@ impl Sequences {
         let holding = st.power.map_or(String::new(), |(_, w, _)| {
             format!(" · holding {}", crate::ui::controls::watts(w))
         });
+        // Counting down, so rounded up: a step in its last second still
+        // has a second left, not none.
+        let up = |r: Duration| clock(Duration::from_secs(r.as_secs_f64().ceil() as u64));
         let left = match (st.remaining, st.condition) {
-            (Some(r), true) => format!("gives up in {}", clock(r)),
-            (Some(r), false) => format!("{} left", clock(r)),
+            (Some(r), true) => format!("gives up in {}", up(r)),
+            (Some(r), false) => format!("{} left", up(r)),
             (None, _) => String::new(),
         };
         let pass = match st.pass {

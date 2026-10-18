@@ -57,7 +57,7 @@ the `dp100 raw` exchange that shows it.
 | `DP100_STUDIO_PREFILL_SECS=3600` | fill the graph with that much synthetic 100 Hz history |
 | `DP100_STUDIO_PREFILL_WINDOW=60` | the window to show after prefilling (default 1 h) |
 | `DP100_STUDIO_TRACE_DRAW=1` | print the graph's draw time per frame |
-| `DP100_STUDIO_PAGE=presets` | open on another page (`monitor`, `presets`, `device`) |
+| `DP100_STUDIO_PAGE=presets` | open a dialog once connected (`presets`, `sequences`, `log`, `device`) |
 
 `scripts/shot.sh OUT.png [WxH] [args]` screenshots the app in a headless
 sway, without touching your session.

@@ -8,16 +8,28 @@ All notable changes to this project are documented here. The format follows
 
 ### DP100 Studio
 
-- Constant power: a Voltage / Power switch in Monitor's Setpoint group. In
+- A new window, built for a desktop. The graph fills it, beside one panel
+  you can size by dragging: the voltage and current on seven-segment
+  readings in the DP100's own colours (volts yellow, amps green, watts
+  purple), the lamps, the setpoints with what the output is doing in words,
+  the preset in use, and the sequence to run. Turn On and Record sit in the
+  header. Presets, sequences and recording open as dialogs from the main
+  menu, and Device Settings as a preferences dialog (Ctrl+,). Stock
+  libadwaita throughout, in light and dark, down to 360 px wide.
+- Sequences run from the panel: pick one, see whether it can run and why
+  not, and run it, following its steps, time left and progress. Its menu
+  makes, duplicates, imports, exports and deletes them. In the editor each
+  step opens in place and saves as it is changed, and steps reorder by
+  dragging.
+- Constant power: a Voltage / Power switch at the top of the setpoints. In
   Power mode the app holds a power by moving the current limit, with the
   voltage at a limit you set, and a CP lamp lights while it holds. It learns
   how the load responds, so a resistor settles in about a second and a
   battery or an LED settles without overshooting. A load that suddenly
   takes more, like a motor breaking free, is cut back within a few
   hundredths of a second, and a geared motor's wander is smoothed rather
-  than chased. It stops on a trip, lost
-  input, an unplug or a change on the panel, and leaves the output on at
-  its last values.
+  than chased. It stops on a trip, lost input, an unplug or a change on the
+  panel, and leaves the output on at its last values.
 - A `power` sequence step holds a power the same way, and keeps holding
   through the steps after it until a set, ramp or power step. Sequences that
   use it are saved as format 3. `examples/sequences/constant-power.toml`
