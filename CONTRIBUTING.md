@@ -61,3 +61,6 @@ the `dp100 raw` exchange that shows it.
 
 `scripts/shot.sh OUT.png [WxH] [args]` screenshots the app in a headless
 sway, without touching your session.
+`scripts/round.py` gives the result the window's rounded corners, or with
+`--dialog` crops out the dialog shown on it and rounds that; the
+screenshots in `docs/screenshots` are made that way.

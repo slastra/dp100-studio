@@ -36,8 +36,9 @@ are all the same unit.
 - A `dp100` command-line tool and a Rust library for the protocol.
 
 <p>
-  <img src="docs/screenshots/sequence-running.png" width="49%" alt="A sequence running">
-  <img src="docs/screenshots/presets.png" width="49%" alt="The preset memories">
+  <img src="docs/screenshots/sequences.png" width="32%" alt="Editing a sequence, with a step open">
+  <img src="docs/screenshots/presets.png" width="32%" alt="The preset memories">
+  <img src="docs/screenshots/device.png" width="32%" alt="Device settings">
 </p>
 
 ## Install
