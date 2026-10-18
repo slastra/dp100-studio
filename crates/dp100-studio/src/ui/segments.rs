@@ -53,6 +53,8 @@ fn cells(value: Option<f64>, int: usize, frac: usize) -> Vec<char> {
     let Some(v) = value.filter(|v| v.is_finite() && *v >= 0.0) else {
         return dashes();
     };
+    // -0.0 passes the check above, and would format with a minus.
+    let v = v + 0.0;
     let text = format!("{v:.frac$}");
     let (whole, part) = text.split_once('.').unwrap_or((&text, ""));
     if whole.len() > int {
@@ -257,6 +259,7 @@ impl SevenSeg {
         imp.frac.set(frac);
         imp.ink.set(ink);
         imp.shown.replace(cells(None, int, frac));
+        d.update_property(&[gtk::accessible::Property::Label("No reading")]);
         d.set_hexpand(true);
         d
     }
@@ -290,5 +293,6 @@ mod tests {
         assert_eq!(cells(None, 2, 3), vec!['-'; 5]);
         assert_eq!(cells(Some(123.0), 2, 3), vec!['-'; 5]);
         assert_eq!(cells(Some(f64::NAN), 2, 3), vec!['-'; 5]);
+        assert_eq!(cells(Some(-0.0), 2, 3), vec![' ', '0', '0', '0', '0']);
     }
 }

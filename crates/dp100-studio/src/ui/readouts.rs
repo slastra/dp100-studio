@@ -1,10 +1,10 @@
-//! The Monitor page.
+//! The main window's panel and graph.
 //!
-//! Laid out like the front of a bench instrument: a panel of annunciator
-//! lamps and the power switch, two big channel readouts (voltage and
-//! current) each with a bar showing how close it sits to its setpoint, and
-//! a quiet footer of secondary figures. The setpoint editor and the graph
-//! follow, then the details.
+//! The panel reads like the front of a bench instrument: annunciator lamps,
+//! the voltage and current on seven-segment readings, each with a bar of
+//! how close it sits to its setpoint, and a footer of secondary figures.
+//! The setpoints, the preset, the sequence and the details follow. The
+//! graph fills the rest of the window.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -129,7 +129,6 @@ const LAMPS: [(&str, &str, Tone); 8] = [
     ("OTP", "Over-temperature trip", Tone::Alert),
 ];
 
-/// The time windows offered, in seconds.
 /// The graph's time windows: a short label, as charting tools write them,
 /// and what it says in full.
 const WINDOWS: [(&str, &str, f64); 6] = [

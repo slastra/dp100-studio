@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format follows
 - A new window, built for a desktop. The graph fills it, beside one panel
   you can size by dragging: the voltage and current on seven-segment
   readings in the DP100's own colours (volts yellow, amps green, watts
-  purple), the lamps, the setpoints with what the output is doing in words,
+  purple, as the graph's lanes now are too, with temperature in blue), the
+  lamps, the setpoints with what the output is doing in words,
   the preset in use, and the sequence to run. Turn On and Record sit in the
   header. Presets, sequences and recording open as dialogs from the main
   menu, and Device Settings as a preferences dialog (Ctrl+,). Stock

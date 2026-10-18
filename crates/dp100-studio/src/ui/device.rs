@@ -1,4 +1,4 @@
-//! The Device page: protection trips, panel and safety settings, and what
+//! Device Settings: protection trips, panel and safety settings, and what
 //! the unit is.
 
 use std::cell::Cell;

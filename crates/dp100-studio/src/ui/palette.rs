@@ -1,9 +1,10 @@
 //! The readings' colours, matched to the DP100's own screen: volts in
 //! yellow, amps in green, watts in purple, and temperature in blue.
 //!
-//! They come from the GNOME palette, a shade for each style: on a light
-//! background the yellow has to deepen to amber to be read at all, and on a
-//! dark one every colour lightens a step. The graph, the readings and the
+//! They come from the GNOME palette (the yellow on light from libadwaita's
+//! yellow accent), a shade for each style: on a light background the yellow
+//! has to deepen to amber to be read at all, and on a dark one every colour
+//! lightens a step. The graph, the readings and the
 //! stylesheet all take them from here.
 
 use gtk::gdk;
@@ -20,7 +21,7 @@ impl Ink {
     /// (light, dark), as 0xRRGGBB.
     fn shades(self) -> (u32, u32) {
         match self {
-            // Yellow 5 and Yellow 3.
+            // libadwaita's yellow accent, and Yellow 4.
             Ink::Volt => (0xc88800, 0xf5c211),
             // Green 5 and Green 3.
             Ink::Amp => (0x26a269, 0x33d17a),

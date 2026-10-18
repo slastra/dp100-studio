@@ -93,7 +93,7 @@ impl Lane {
         self as usize
     }
 
-    /// The GNOME palette's blue, orange, purple and red.
+    /// The readings' colours, from the palette.
     fn color(self) -> gdk::RGBA {
         match self {
             Lane::Voltage => Ink::Volt,

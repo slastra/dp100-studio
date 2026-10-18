@@ -55,7 +55,8 @@ double-tapping ◀ on its panel, which it needs after every power-up.
 
 ### From source
 
-Needs Rust 1.88 or newer, GTK 4.14 and libadwaita 1.5 or newer.
+Needs Rust 1.88 or newer, GTK 4.14 and libadwaita 1.5 or newer, and
+`glib-compile-resources` to build (it comes with GLib's development files).
 
 ```sh
 cargo run --release -p dp100-studio

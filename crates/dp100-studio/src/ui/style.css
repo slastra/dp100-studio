@@ -32,11 +32,12 @@
 .lamp.lit.alert .led { background: @error_color; box-shadow: 0 0 6px alpha(@error_color, 0.8); }
 .lamp.lit.info .led { background: @accent_bg_color; box-shadow: 0 0 6px alpha(@accent_bg_color, 0.8); }
 
-/* A shown lane's toggle in the lane's colour, matching its trace. */
-.lanes > button.volt:checked { color: @dp_volt; }
-.lanes > button.amp:checked { color: @dp_amp; }
-.lanes > button.watt:checked { color: @dp_watt; }
-.lanes > button.heat:checked { color: @dp_heat; }
+/* A shown lane's toggle in the lane's colour, matching its trace, mixed
+   toward the text colour so a label on a light button can be read. */
+.lanes > button.volt:checked { color: mix(@dp_volt, @window_fg_color, 0.4); }
+.lanes > button.amp:checked { color: mix(@dp_amp, @window_fg_color, 0.4); }
+.lanes > button.watt:checked { color: mix(@dp_watt, @window_fg_color, 0.4); }
+.lanes > button.heat:checked { color: mix(@dp_heat, @window_fg_color, 0.4); }
 
 /* A reading's headroom bar in the reading's colour. */
 progressbar.volt > trough > progress { background-color: @dp_volt; }

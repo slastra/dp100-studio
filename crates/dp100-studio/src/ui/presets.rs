@@ -532,10 +532,10 @@ impl Presets {
             c.activate.set_sensitive(!is);
             c.root.set_activatable(!is);
             // The firmware won't take a save to the preset in use; its
-            // values are changed live from the Monitor and Device pages.
+            // values are changed live from the panel and Device Settings.
             c.edit.set_sensitive(!is);
             c.edit.set_tooltip_text(Some(&if is {
-                "In Use: Change It on the Monitor and Device Pages".to_owned()
+                "In Use: Change It in the Panel and Device Settings".to_owned()
             } else {
                 format!("Change What M{} Holds", k + 1)
             }));

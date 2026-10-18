@@ -3,6 +3,6 @@
   <!-- Symbolic icons the app uses that not every icon theme has. GTK finds
        them here only when the theme in use lacks them. -->
   <gresource prefix="/io/github/slastra/DP100Studio/icons/scalable/actions">
-    <file preprocess="xml-stripblanks" alias="list-drag-handle-symbolic.svg">icons/list-drag-handle-symbolic.svg</file>
+    <file alias="list-drag-handle-symbolic.svg">icons/list-drag-handle-symbolic.svg</file>
   </gresource>
 </gresources>

@@ -38,11 +38,14 @@ pub struct Panel {
     pub body: gtk::Box,
     lamp_row: gtk::FlowBox,
     lamps: Vec<gtk::Box>,
+    /// Each lamp's meaning, for what a screen reader says it shows.
+    tips: Vec<String>,
 }
 
 impl Panel {
     /// `lamps` are (legend, tooltip, tone). `action` goes at the top right.
     pub fn new(lamps: &[(&str, &str, Tone)], action: Option<&gtk::Widget>) -> Self {
+        let tips: Vec<String> = lamps.iter().map(|(_, tip, _)| (*tip).to_owned()).collect();
         // A stock card, its contents inset as a boxed list's rows are.
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -73,11 +76,13 @@ impl Panel {
         let lamps: Vec<gtk::Box> = lamps
             .iter()
             .map(|(legend, tip, tone)| {
+                // An image to assistive technology, named for what it shows.
                 let l = gtk::Box::builder()
                     .spacing(6)
                     .css_classes(["lamp", tone.class()])
                     .tooltip_text(*tip)
                     .valign(gtk::Align::Center)
+                    .accessible_role(gtk::AccessibleRole::Img)
                     .build();
                 l.append(
                     &gtk::Box::builder()
@@ -86,7 +91,7 @@ impl Panel {
                         .build(),
                 );
                 l.append(&gtk::Label::new(Some(legend)));
-                l.update_property(&[gtk::accessible::Property::Label(tip)]);
+                l.update_property(&[gtk::accessible::Property::Label(&format!("{tip}: off"))]);
                 add_to_flow(&row, &l);
                 l
             })
@@ -108,6 +113,7 @@ impl Panel {
             body,
             lamp_row: row,
             lamps,
+            tips,
         }
     }
 
@@ -118,11 +124,14 @@ impl Panel {
             } else {
                 l.remove_css_class("lit");
             }
+            // Lit is otherwise only a colour.
+            if let Some(tip) = self.tips.get(k) {
+                let state = if lit { "on" } else { "off" };
+                l.update_property(&[gtk::accessible::Property::Label(&format!("{tip}: {state}"))]);
+            }
         }
     }
 
-    /// On a narrow window the lamps and the action stack, the action at
-    /// full width.
     /// Puts the lamps in rows of `n`, spread across the panel: the first of
     /// each row at the left edge, the last at the right, and all as wide as
     /// the widest, so the rows line up as columns.
@@ -136,7 +145,10 @@ impl Panel {
         for chunk in self.lamps.chunks(n.max(1)) {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             for (k, lamp) in chunk.iter().enumerate() {
-                if let Some(cell) = lamp.parent() {
+                // Out of its flow box cell first, so it has no parent to
+                // be appended from.
+                if let Some(cell) = lamp.parent().and_downcast::<gtk::FlowBoxChild>() {
+                    cell.set_child(None::<&gtk::Widget>);
                     self.lamp_row.remove(&cell);
                 }
                 if k > 0 {
@@ -161,6 +173,8 @@ impl Panel {
         }
     }
 
+    /// On a narrow window the lamps and the action stack, the action at
+    /// full width.
     pub fn narrow_layout(&self, bp: &adw::Breakpoint, action: Option<&gtk::Widget>) {
         bp.add_setter(
             &self.top,

@@ -57,7 +57,7 @@ const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
             <property name="title">Windows</property>
             <child>
               <object class="GtkShortcutsShortcut">
-                <property name="title">Presets, Sequences, Recording, Device</property>
+                <property name="title">Presets, Edit Sequence, Recording, Device Settings</property>
                 <property name="accelerator">&lt;Alt&gt;2...&lt;Alt&gt;5</property>
               </object>
             </child>
@@ -136,7 +136,9 @@ fn load_window_state() -> Option<WindowState> {
     let width = it.next()?.parse().ok()?;
     let height = it.next()?.parse().ok()?;
     let maximized = it.next().is_some_and(|m| m == "1");
-    let panel = it.next().and_then(|p| p.parse().ok());
+    // Without a panel width, it was saved by the old one-column layout,
+    // whose size suits this window badly (640 wide opens it narrow).
+    let panel = Some(it.next()?.parse().ok()?);
     (width >= 360 && height >= 294).then_some(WindowState {
         width,
         height,

@@ -1,4 +1,5 @@
-//! The Log page: CSV recording and the energy delivered.
+//! Recording to CSV, and the energy delivered: its dialog, and Record in
+//! the header.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
