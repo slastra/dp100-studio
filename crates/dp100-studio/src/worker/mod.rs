@@ -18,6 +18,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use crate::logging::csv::Recorder;
 use crate::logging::energy::Energy;
 use crate::seq::exec::{Measure, Outcome, Run, Status as SeqStatus, Target};
+use crate::seq::power::{Hold, HoldState, PowerTarget};
 use crate::seq::schema::Sequence;
 use crate::seq::validate::{DeviceLimits, validate};
 use dp100::sim::SimHandle;
@@ -89,6 +90,14 @@ pub enum Command {
     RunSequence(Box<Sequence>),
     /// Stop the running sequence, applying its `on_abort`.
     StopSequence,
+    /// Hold the output at a power, or change what is held. `turn_on` turns
+    /// the output on once the setpoints are in place.
+    HoldPower {
+        want: PowerTarget,
+        turn_on: bool,
+    },
+    /// Stop holding power. The output stays as it is.
+    StopPower,
     Shutdown,
 }
 
@@ -111,6 +120,14 @@ pub struct Snapshot {
 pub struct Sample {
     pub at: Instant,
     pub m: BasicInfo,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PowerStatus {
+    pub want: PowerTarget,
+    pub state: HoldState,
+    /// The average power over the last update, in watts.
+    pub power: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +174,10 @@ pub enum Event {
         name: String,
         outcome: Outcome,
     },
+    /// Power is being held.
+    Power(PowerStatus),
+    /// Holding power stopped, and why. The output is left as it was.
+    PowerEnded(String),
     /// The device has been closed on request.
     Released,
     Disconnected(String),
@@ -352,8 +373,21 @@ struct Session {
     /// The latest measurements, for checking a sequence before it runs.
     last: Option<BasicInfo>,
     seq: Option<SeqRun>,
+    power: Option<PowerRun>,
+    /// The device settings, for the over-power limit.
+    system: Option<SystemSettings>,
     last_status: Instant,
     last_output: Instant,
+}
+
+/// A power hold and what it needs between ticks.
+struct PowerRun {
+    hold: Hold,
+    /// The output as the hold last left it, to notice changes made from
+    /// elsewhere.
+    commanded: Option<Setpoints>,
+    /// The state last reported, so a change is reported at once.
+    reported: Option<HoldState>,
 }
 
 /// A running sequence and what it needs between ticks.
@@ -421,6 +455,8 @@ impl Session {
             output: None,
             last: None,
             seq: None,
+            power: None,
+            system: None,
             last_status: now,
             last_output: now,
         }
@@ -480,6 +516,62 @@ impl Session {
         }
     }
 
+    fn report_power(&mut self, out: &Out) {
+        if let Some(pr) = &mut self.power {
+            pr.reported = Some(pr.hold.state());
+            out.send(Event::Power(PowerStatus {
+                want: pr.hold.want(),
+                state: pr.hold.state(),
+                power: pr.hold.power(),
+            }));
+        }
+    }
+
+    /// Stops holding power for `why`. The output is left as it is.
+    fn stop_power(&mut self, why: &str, out: &Out) {
+        if self.power.take().is_some() {
+            out.send(Event::PowerEnded(why.to_owned()));
+        }
+    }
+
+    /// Why `want` can't be held on this device now, if it can't.
+    fn check_power(&self, want: &PowerTarget) -> Result<(), String> {
+        let (Some(o), Some(m), Some(sys)) = (self.output, self.last, self.system) else {
+            return Err("The DP100 hasn't reported its limits yet; try again in a moment.".into());
+        };
+        let opp = f64::from(sys.opp_dw) / 10.0;
+        let vmax = (f64::from(o.ovp_mv) / 1000.0)
+            .min(f64::from(m.vo_max_mv) / 1000.0)
+            .min(30.0);
+        let imax = (f64::from(o.ocp_ma) / 1000.0).min(5.0);
+        if want.power <= 0.0 {
+            return Err("The power needs to be above zero.".into());
+        }
+        if want.power >= opp.min(100.0) {
+            return Err(format!(
+                "{:.2} W is at or above the over-power trip of {opp:.1} W.",
+                want.power
+            ));
+        }
+        if want.max_voltage > vmax + 1e-9 {
+            return Err(format!(
+                "The voltage limit can be at most {vmax:.2} V here (the over-voltage trip or what the input can give)."
+            ));
+        }
+        if want.max_current > imax + 1e-9 {
+            return Err(format!(
+                "The current limit can be at most {imax:.3} A (the over-current trip)."
+            ));
+        }
+        if want.power > want.max_voltage * want.max_current + 1e-9 {
+            return Err(format!(
+                "{:.2} W can't be reached within {:.2} V and {:.3} A.",
+                want.power, want.max_voltage, want.max_current
+            ));
+        }
+        Ok(())
+    }
+
     /// Ends a running recording, reporting where it went or why it failed.
     fn stop_recording(&mut self, out: &Out) {
         if let Some(r) = self.recorder.take() {
@@ -497,6 +589,7 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
     let mut s = Session::new();
     // A recording needs the setpoints from its first row on.
     s.output = dev.output().ok();
+    s.system = dev.system().ok();
     let ended = poll_session(dev, cmds, out, &mut s);
     let why = match &ended {
         Ended::Shutdown => "DP100 Studio was closed.".to_owned(),
@@ -504,6 +597,7 @@ fn poll(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out) -> Ended {
         Ended::Lost(e) => format!("The DP100 stopped responding ({e})."),
     };
     s.stop_sequence(dev, &why, out);
+    s.stop_power(&why, out);
     s.stop_recording(out);
     ended
 }
@@ -516,20 +610,30 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
             Wake::Stop => return Ended::Shutdown,
             Wake::Command(Command::Release) => return Ended::Released,
             Wake::Command(Command::Do(action)) => {
-                if s.seq.is_some() {
-                    // While a sequence runs it owns the setpoints. Turning the
-                    // output off is always allowed, and stops the sequence.
+                if s.seq.is_some() || s.power.is_some() {
+                    // While a sequence or a power hold runs it owns the
+                    // setpoints. Turning the output off is always allowed,
+                    // and stops it.
                     if let Action::SetOutput(false) = action {
                         s.stop_sequence(dev, "You turned the output off.", out);
+                        s.stop_power("You turned the output off.", out);
                     } else {
-                        out.send(Event::Done(Err(
+                        out.send(Event::Done(Err(if s.seq.is_some() {
                             "A sequence is running. Stop it first.".into()
-                        )));
+                        } else {
+                            "Power mode is holding the setpoints. Switch back to voltage first."
+                                .into()
+                        })));
                         continue;
                     }
                 }
                 match perform(dev, &action, out) {
-                    Ok(note) => out.send(Event::Done(Ok(note))),
+                    Ok(note) => {
+                        if let Action::SetSystem(_) = action {
+                            s.system = dev.system().ok().or(s.system);
+                        }
+                        out.send(Event::Done(Ok(note)));
+                    }
                     Err(e) if is_gone(&e) => return Ended::Lost(e.to_string()),
                     Err(e) => out.send(Event::Done(Err(e.to_string()))),
                 }
@@ -568,6 +672,12 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                     out.send(Event::Done(Err("A sequence is already running.".into())));
                     continue;
                 }
+                if s.power.is_some() {
+                    out.send(Event::Done(Err(
+                        "Power mode is on. Switch back to voltage first.".into(),
+                    )));
+                    continue;
+                }
                 let limits = match (s.output, s.last) {
                     (Some(o), Some(m)) => DeviceLimits {
                         ovp: f64::from(o.ovp_mv) / 1000.0,
@@ -604,6 +714,58 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                 s.stop_sequence(dev, "Stopped by you.", out);
                 continue;
             }
+            Wake::Command(Command::HoldPower { want, turn_on }) => {
+                if s.seq.is_some() {
+                    out.send(Event::Done(Err(
+                        "A sequence is running. Stop it first.".into()
+                    )));
+                    continue;
+                }
+                if let Err(e) = s.check_power(&want) {
+                    out.send(Event::Done(Err(e)));
+                    continue;
+                }
+                let pr = s.power.get_or_insert_with(|| PowerRun {
+                    hold: Hold::new(want),
+                    commanded: None,
+                    reported: None,
+                });
+                pr.hold.retarget(want);
+                let mut gone = None;
+                let mut t = DevTarget {
+                    dev,
+                    commanded: &mut pr.commanded,
+                    gone: &mut gone,
+                };
+                // The setpoints go in place before the output comes on.
+                let on = s.last.and_then(|m| m.output_on()).unwrap_or(false);
+                let placed = pr.hold.tick(Instant::now(), &Measure::default(), &mut t);
+                let result = placed.and_then(|_| {
+                    if turn_on && !on {
+                        t.output(true)
+                    } else {
+                        Ok(())
+                    }
+                });
+                if let Some(why) = gone {
+                    return Ended::Lost(why);
+                }
+                match result {
+                    Ok(()) => {
+                        out.send(Event::Done(Ok(None)));
+                        s.report_power(out);
+                    }
+                    Err(e) => {
+                        s.stop_power(&format!("Couldn't start holding power: {e}"), out);
+                        out.send(Event::Done(Err(e)));
+                    }
+                }
+                continue;
+            }
+            Wake::Command(Command::StopPower) => {
+                s.stop_power("Back to voltage mode.", out);
+                continue;
+            }
             Wake::Command(Command::ResetEnergy) => {
                 s.energy = Energy::new(s.interval);
                 s.report_energy(out);
@@ -636,25 +798,50 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
         };
         s.energy.add(now, m.vout_mv, m.iout_ma);
         s.last = Some(m);
+        let measure = Measure {
+            voltage: f64::from(m.vout_mv) / 1000.0,
+            current: f64::from(m.iout_ma) / 1000.0,
+            power: f64::from(m.power_mw()) / 1000.0,
+            input: f64::from(m.vin_mv) / 1000.0,
+            temperature: f64::from(m.temp1_dc) / 10.0,
+            on: m.output_on().unwrap_or(false),
+            cc: m.mode == Mode::ConstantCurrent,
+            ..Measure::default()
+        };
+        // A trip or a lost input stops a run before it does anything else.
+        let stop = if m.fault != Fault::Ok {
+            Some(format!("Protection tripped ({}).", m.fault.label()))
+        } else if m.mode == Mode::NoInput {
+            Some("The input power went away.".to_owned())
+        } else {
+            None
+        };
+        if let Some(pr) = &mut s.power {
+            let mut gone = None;
+            let mut t = DevTarget {
+                dev,
+                commanded: &mut pr.commanded,
+                gone: &mut gone,
+            };
+            let ticked = match &stop {
+                Some(why) => Err(why.clone()),
+                None => pr.hold.tick(now, &measure, &mut t),
+            };
+            if let Some(why) = gone {
+                return Ended::Lost(why);
+            }
+            match ticked {
+                Ok(state) if pr.reported != Some(state) => s.report_power(out),
+                Ok(_) => {}
+                Err(why) => s.stop_power(&why, out),
+            }
+        }
         if let Some(sr) = &mut s.seq {
             sr.energy.add(now, m.vout_mv, m.iout_ma);
             let measure = Measure {
-                voltage: f64::from(m.vout_mv) / 1000.0,
-                current: f64::from(m.iout_ma) / 1000.0,
-                power: f64::from(m.power_mw()) / 1000.0,
-                input: f64::from(m.vin_mv) / 1000.0,
-                temperature: f64::from(m.temp1_dc) / 10.0,
                 energy: sr.energy.mwh(),
                 charge: sr.energy.mah(),
-            };
-            // A trip or a lost input stops the run before it does anything
-            // else.
-            let stop = if m.fault != Fault::Ok {
-                Some(format!("Protection tripped ({}).", m.fault.label()))
-            } else if m.mode == Mode::NoInput {
-                Some("The input power went away.".to_owned())
-            } else {
-                None
+                ..measure
             };
             let mut gone = None;
             let mut t = DevTarget {
@@ -662,8 +849,8 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                 commanded: &mut sr.commanded,
                 gone: &mut gone,
             };
-            match stop {
-                Some(why) => sr.run.abort(&why, &mut t),
+            match &stop {
+                Some(why) => sr.run.abort(why, &mut t),
                 None => {
                     sr.run.tick(now, &measure, &mut t);
                 }
@@ -699,10 +886,18 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                     out.send(Event::Output(o));
                     // Something other than the sequence changed the output:
                     // its plan no longer describes what the DP100 is doing.
+                    let changed = |c: Setpoints| {
+                        o.on != c.on || o.vset_mv != c.vset_mv || o.iset_ma != c.iset_ma
+                    };
                     if let Some(c) = s.seq.as_ref().and_then(|sr| sr.commanded)
-                        && (o.on != c.on || o.vset_mv != c.vset_mv || o.iset_ma != c.iset_ma)
+                        && changed(c)
                     {
                         s.stop_sequence(dev, "The output was changed outside the sequence.", out);
+                    }
+                    if let Some(c) = s.power.as_ref().and_then(|pr| pr.commanded)
+                        && changed(c)
+                    {
+                        s.stop_power("The output was changed on the DP100.", out);
                     }
                 }
                 Err(e) if e.is_transient() => {}
@@ -714,6 +909,7 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
             s.report_energy(out);
             s.report_recording(out, now);
             s.report_sequence(out, now);
+            s.report_power(out);
         }
     }
 }
@@ -924,6 +1120,120 @@ mod tests {
         // Well past the first flush, which only happens after a second.
         assert!(rows > 5, "only {rows} lines made it to disk");
         assert!(text.ends_with('\n'), "last row is complete");
+    }
+
+    fn hold(w: &Worker, power: f64, max_voltage: f64, max_current: f64, turn_on: bool) {
+        w.commands
+            .send(Command::HoldPower {
+                want: PowerTarget {
+                    power,
+                    max_voltage,
+                    max_current,
+                },
+                turn_on,
+            })
+            .unwrap();
+    }
+
+    /// A 10 Ω load held at 1 W, which settles at about 316 mA.
+    fn holding_one_watt() -> (Worker, SimHandle) {
+        let (w, h) = connected();
+        h.set_load(Some(10.0));
+        next(&w, |e| matches!(e, Event::Sample(_)));
+        hold(&w, 1.0, 8.0, 1.0, true);
+        next(&w, |e| {
+            matches!(
+                e,
+                Event::Power(PowerStatus {
+                    state: HoldState::Holding,
+                    ..
+                })
+            )
+        });
+        (w, h)
+    }
+
+    fn power_ended(w: &Worker) -> String {
+        let Event::PowerEnded(why) = next(w, |e| matches!(e, Event::PowerEnded(_))) else {
+            unreachable!()
+        };
+        why
+    }
+
+    #[test]
+    fn a_new_target_is_followed() {
+        let (w, h) = connected();
+        h.set_load(Some(50.0));
+        h.lock().noise = true;
+        next(&w, |e| matches!(e, Event::Sample(_)));
+        hold(&w, 0.5, 5.0, 0.1, true);
+        std::thread::sleep(Duration::from_millis(500));
+        hold(&w, 0.3, 5.0, 0.1, false);
+        let t0 = Instant::now();
+        next(
+            &w,
+            |e| matches!(e, Event::Power(st) if st.state == HoldState::Holding && st.want.power == 0.3),
+        );
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+        // 0.3 W into 50 Ω is about 77 mA.
+        let i = h.snapshot().live.iset_ma;
+        assert!((75..=79).contains(&i), "{i} mA");
+    }
+
+    #[test]
+    fn holds_power_on_a_resistor() {
+        let (_w, h) = holding_one_watt();
+        let s = h.snapshot();
+        assert!(s.output_on);
+        assert_eq!(s.live.vset_mv, 8_000, "the voltage sits at its limit");
+        assert!(
+            (313..=320).contains(&s.live.iset_ma),
+            "{} mA",
+            s.live.iset_ma
+        );
+    }
+
+    #[test]
+    fn a_change_on_the_panel_ends_the_hold_and_leaves_the_output() {
+        let (w, h) = holding_one_watt();
+        h.lock().live.iset_ma = 100;
+        assert!(power_ended(&w).contains("changed on the DP100"));
+        assert!(h.snapshot().output_on);
+    }
+
+    #[test]
+    fn turning_the_output_off_ends_the_hold() {
+        let (w, h) = holding_one_watt();
+        w.commands
+            .send(Command::Do(Action::SetOutput(false)))
+            .unwrap();
+        assert_eq!(power_ended(&w), "You turned the output off.");
+        next(&w, |e| matches!(e, Event::Done(_)));
+        assert!(!h.snapshot().output_on);
+    }
+
+    #[test]
+    fn a_trip_ends_the_hold() {
+        let (w, h) = holding_one_watt();
+        h.trip(Fault::OverCurrent);
+        assert!(power_ended(&w).contains("Protection tripped"));
+    }
+
+    #[test]
+    fn sequences_wait_for_power_mode_and_over_power_is_refused() {
+        let (w, _h) = holding_one_watt();
+        w.commands
+            .send(Command::RunSequence(sequence(ON_WAIT_OFF)))
+            .unwrap();
+        let Event::Done(Err(e)) = next(&w, |e| matches!(e, Event::Done(Err(_)))) else {
+            unreachable!()
+        };
+        assert!(e.contains("Power mode is on"), "{e}");
+        hold(&w, 101.0, 8.0, 5.0, false);
+        let Event::Done(Err(e)) = next(&w, |e| matches!(e, Event::Done(Err(_)))) else {
+            unreachable!()
+        };
+        assert!(e.contains("over-power"), "{e}");
     }
 
     fn sequence(steps: &str) -> Box<Sequence> {

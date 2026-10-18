@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### DP100 Studio
 
+- Constant power: a Voltage / Power switch in Monitor's Setpoint group. In
+  Power mode the app holds a power by moving the current limit, with the
+  voltage at a limit you set, and a CP lamp lights while it holds. It learns
+  how the load responds, so a resistor settles in about a second and a
+  battery or an LED settles without overshooting. It stops on a trip, lost
+  input, an unplug or a change on the panel, and leaves the output on at
+  its last values.
+
 - Stepped ramps: a ramp with a `step` moves in exact increments, each held
   for an equal share of its duration and timed from the ramp's start, so it
   does what the DP100's scan mode does. The step editor has an "In steps"

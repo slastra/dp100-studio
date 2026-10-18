@@ -106,7 +106,8 @@ fi
 if [ -n "${SHOT_WTYPE:-}" ]; then
     # shellcheck disable=SC2086  # word splitting is the point
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wtype $SHOT_WTYPE
-    sleep 0.6
+    # SHOT_AFTER: seconds to let the typing take effect before the capture.
+    sleep "${SHOT_AFTER:-0.6}"
 fi
 GEOM=()
 [ -n "${SHOT_WINDOW:-}" ] && GEOM=(-g "0,0 $SHOT_WINDOW")

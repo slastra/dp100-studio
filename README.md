@@ -17,6 +17,9 @@ are all the same unit.
 - **Control**: setpoints that apply as you change them, an output switch that
   asks before turning on (F9 turns it off from anywhere), and protection
   limits.
+- **Constant power**, which the DP100 can't do by itself: the app holds a
+  power by adjusting the current limit, within a voltage and current limit
+  you set.
 - **Presets**: edit and recall the supply's nine memories.
 - **Sequences**: steps such as ramps, waits, and waiting for a measurement to
   meet a condition, checked against the supply's limits before they run.

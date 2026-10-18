@@ -2,5 +2,6 @@
 //! executor the worker ticks.
 
 pub mod exec;
+pub mod power;
 pub mod schema;
 pub mod validate;

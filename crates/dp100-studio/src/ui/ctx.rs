@@ -89,12 +89,31 @@ impl Ctx {
         appearance: adw::ResponseAppearance,
         accept: impl Fn() + 'static,
     ) {
+        self.ask(heading, body, accept_label, appearance, accept, || {});
+    }
+
+    /// [`Ctx::confirm`] with something to do on Cancel too.
+    pub fn ask(
+        &self,
+        heading: &str,
+        body: &str,
+        accept_label: &str,
+        appearance: adw::ResponseAppearance,
+        accept: impl Fn() + 'static,
+        cancel: impl Fn() + 'static,
+    ) {
         let d = adw::AlertDialog::new(Some(heading), Some(body));
         d.add_responses(&[("cancel", "Cancel"), ("accept", accept_label)]);
         d.set_response_appearance("accept", appearance);
         d.set_default_response(Some("cancel"));
         d.set_close_response("cancel");
-        d.connect_response(Some("accept"), move |_, _| accept());
+        d.connect_response(None, move |_, r| {
+            if r == "accept" {
+                accept();
+            } else {
+                cancel();
+            }
+        });
         d.present(Some(&self.window));
     }
 }

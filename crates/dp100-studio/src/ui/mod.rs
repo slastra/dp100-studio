@@ -131,7 +131,14 @@ fn save_window_state(win: &adw::ApplicationWindow) {
 /// microcontroller board, so it sits in CV with the board's radio bursts.
 fn demo_sim() -> Source {
     let mut s = State::default();
-    s.board = Some(Board::new());
+    // A development hook for screenshots of loads other than the board.
+    match std::env::var("DP100_STUDIO_SIM_OHMS")
+        .ok()
+        .and_then(|r| r.parse().ok())
+    {
+        Some(ohms) => s.load_ohms = Some(ohms),
+        None => s.board = Some(Board::new()),
+    }
     s.noise = true;
     s.live.vset_mv = 5_000;
     s.live.iset_ma = 100;
@@ -224,6 +231,23 @@ pub fn activate(app: &adw::Application, simulate: bool) {
             );
             return glib::Propagation::Stop;
         }
+        // Quitting ends a power hold; the output stays at its last values,
+        // no longer adjusted, so say so first.
+        if ui.readouts.is_holding() && !confirmed.get() {
+            let win = win.clone();
+            ui.ctx.confirm(
+                "Stop Holding Power and Quit?",
+                "Power mode is holding the output. Quitting stops adjusting it, \
+                 and the output stays on at its last settings",
+                "Quit",
+                adw::ResponseAppearance::Destructive,
+                move || {
+                    save_window_state(&win);
+                    win.destroy();
+                },
+            );
+            return glib::Propagation::Stop;
+        }
         save_window_state(win);
         worker.borrow_mut().take();
         glib::Propagation::Proceed
@@ -303,6 +327,8 @@ impl Window {
         };
         let reason = if self.sequences.is_running() {
             Some("Running a sequence on the DP100")
+        } else if self.readouts.is_holding() {
+            Some("Holding a constant power on the DP100")
         } else if self.recording.get() {
             Some("Recording the DP100's measurements")
         } else {
@@ -658,6 +684,26 @@ impl Window {
     fn apply(&self, ev: Event) {
         match ev {
             Event::Searching => self.status("No DP100 Connected", USBD_HINT),
+            Event::Power(st) => {
+                let was_holding = self.readouts.is_holding();
+                self.readouts.show_power(&st);
+                if !was_holding {
+                    self.update_inhibit();
+                }
+            }
+            Event::PowerEnded(why) => {
+                self.readouts.power_ended();
+                self.update_inhibit();
+                // Ending it yourself needs no word; anything else stopping
+                // the hold does.
+                if !matches!(
+                    why.as_str(),
+                    "Back to voltage mode." | "You turned the output off."
+                ) {
+                    self.ctx.toast(&format!("Power mode stopped. {why}"));
+                    self.notify("power", "Power Mode Stopped", &why, "monitor");
+                }
+            }
             Event::Problem(p) => match &p {
                 Problem::PermissionDenied(path) => {
                     self.status(
@@ -814,7 +860,10 @@ impl Window {
             }
             Event::Done(Ok(Some(note))) => self.ctx.toast(&note),
             Event::Done(Ok(None)) => {}
-            Event::Done(Err(e)) => self.ctx.error(&e),
+            Event::Done(Err(e)) => {
+                self.readouts.refused();
+                self.ctx.error(&e);
+            }
             Event::Released => {
                 self.status(
                     "Front Panel Released",

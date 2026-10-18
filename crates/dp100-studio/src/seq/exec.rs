@@ -26,6 +26,9 @@ pub struct Measure {
     /// Since the run started, mWh and mAh.
     pub energy: f64,
     pub charge: f64,
+    /// Whether the output is on, and in constant current.
+    pub on: bool,
+    pub cc: bool,
 }
 
 impl Measure {

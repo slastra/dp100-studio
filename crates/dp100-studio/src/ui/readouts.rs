@@ -19,6 +19,8 @@ use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
 use super::page::Page;
 use super::panel::{Panel, Tone};
+use crate::seq::power::HoldState;
+use crate::worker::PowerStatus;
 
 /// Text readouts refresh at most this often. The graph takes every sample;
 /// labels repainting at 100 Hz while recording would only cost power.
@@ -87,9 +89,10 @@ fn stat(caption: &str) -> (gtk::Label, gtk::Box) {
 }
 
 /// The panel's status lamps, in the order a front panel would print them.
-const LAMPS: [(&str, &str, Tone); 7] = [
+const LAMPS: [(&str, &str, Tone); 8] = [
     ("CV", "Regulating voltage", Tone::Ok),
     ("CC", "Limiting current", Tone::Warn),
+    ("CP", "Holding a constant power", Tone::Info),
     ("OUT", "Output on", Tone::Alert),
     ("OVP", "Over-voltage trip", Tone::Alert),
     ("OCP", "Over-current trip", Tone::Alert),
@@ -337,6 +340,25 @@ impl Readouts {
         self.controls.set_locked(locked);
     }
 
+    pub fn show_power(&self, st: &PowerStatus) {
+        self.controls.show_power(st);
+        self.lamp(2, st.state == HoldState::Holding);
+    }
+
+    pub fn power_ended(&self) {
+        self.controls.power_ended();
+        self.lamp(2, false);
+    }
+
+    /// An action was refused; see [`Controls::refused`].
+    pub fn refused(&self) {
+        self.controls.refused();
+    }
+
+    pub fn is_holding(&self) -> bool {
+        self.controls.is_holding()
+    }
+
     fn lamp(&self, k: usize, lit: bool) {
         self.panel.lamp(k, lit);
     }
@@ -385,11 +407,11 @@ impl Readouts {
         let on = m.output_on().unwrap_or(false);
         self.lamp(0, on && m.mode == Mode::ConstantVoltage);
         self.lamp(1, on && m.mode == Mode::ConstantCurrent);
-        self.lamp(2, on);
-        self.lamp(3, m.fault == Fault::OverVoltage);
-        self.lamp(4, m.fault == Fault::OverCurrent);
-        self.lamp(5, m.fault == Fault::OverPower);
-        self.lamp(6, m.fault == Fault::OverTemperature);
+        self.lamp(3, on);
+        self.lamp(4, m.fault == Fault::OverVoltage);
+        self.lamp(5, m.fault == Fault::OverCurrent);
+        self.lamp(6, m.fault == Fault::OverPower);
+        self.lamp(7, m.fault == Fault::OverTemperature);
     }
 
     pub fn show_output(&self, o: &Setpoints) {
