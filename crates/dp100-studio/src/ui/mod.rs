@@ -34,80 +34,52 @@ const USBD_HINT: &str = "Connect it over USB and put it in USBD mode: double-tap
 /// The pages, for Alt+1 to Alt+5: the main window, then the dialogs.
 const PAGES: [&str; 5] = ["monitor", "presets", "sequences", "log", "device"];
 
-const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<interface>
-  <object class="GtkShortcutsWindow" id="help_overlay">
-    <property name="modal">True</property>
-    <child>
-      <object class="GtkShortcutsSection">
-        <property name="section-name">main</property>
-        <child>
-          <object class="GtkShortcutsGroup">
-            <property name="title">Output</property>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Turn Output Off</property>
-                <property name="accelerator">F9</property>
-              </object>
-            </child>
-          </object>
-        </child>
-        <child>
-          <object class="GtkShortcutsGroup">
-            <property name="title">Windows</property>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Presets, Edit Sequence, Recording, Device Settings</property>
-                <property name="accelerator">&lt;Alt&gt;2...&lt;Alt&gt;5</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Device Settings</property>
-                <property name="accelerator">&lt;Control&gt;comma</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Back to the Graph</property>
-                <property name="accelerator">&lt;Alt&gt;1</property>
-              </object>
-            </child>
-          </object>
-        </child>
-        <child>
-          <object class="GtkShortcutsGroup">
-            <property name="title">General</property>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Main Menu</property>
-                <property name="accelerator">F10</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Keyboard Shortcuts</property>
-                <property name="accelerator">&lt;Control&gt;question</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Close Window</property>
-                <property name="accelerator">&lt;Control&gt;w</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Quit</property>
-                <property name="accelerator">&lt;Control&gt;q</property>
-              </object>
-            </child>
-          </object>
-        </child>
-      </object>
-    </child>
-  </object>
-</interface>"#;
+/// The keyboard shortcuts, as the Keyboard Shortcuts dialog lists them:
+/// groups of (what it does, its accelerators).
+type ShortcutGroup = (&'static str, &'static [(&'static str, &'static str)]);
+const SHORTCUTS: [ShortcutGroup; 3] = [
+    ("Output", &[("Turn Output Off", "F9")]),
+    (
+        "Windows",
+        &[
+            ("Back to the Graph", "<Alt>1"),
+            ("Presets", "<Alt>2"),
+            ("Edit Sequence", "<Alt>3"),
+            ("Recording", "<Alt>4"),
+            ("Device Settings", "<Control>comma <Alt>5"),
+        ],
+    ),
+    (
+        "General",
+        &[
+            ("Main Menu", "F10"),
+            ("Keyboard Shortcuts", "<Control>question"),
+            ("Close Window", "<Control>w"),
+            ("Quit", "<Control>q"),
+        ],
+    ),
+];
+
+/// The shortcuts as a dialog like the app's others: stock rows, each with
+/// its keys as the desktop draws them.
+fn shortcuts_dialog() -> adw::Dialog {
+    let page = adw::PreferencesPage::new();
+    for (title, rows) in SHORTCUTS {
+        let group = adw::PreferencesGroup::builder().title(title).build();
+        for (what, keys) in rows {
+            let row = adw::ActionRow::builder().title(*what).build();
+            row.add_suffix(
+                &gtk::ShortcutLabel::builder()
+                    .accelerator(*keys)
+                    .valign(gtk::Align::Center)
+                    .build(),
+            );
+            group.add(&row);
+        }
+        page.add(&group);
+    }
+    page_dialog("Keyboard Shortcuts", &page, 760)
+}
 
 /// Where the window's size is remembered between runs.
 fn window_state_file() -> std::path::PathBuf {
@@ -427,6 +399,9 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
     let close = gio::ActionEntry::builder("close")
         .activate(|win: &adw::ApplicationWindow, _, _| win.close())
         .build();
+    let shortcuts = gio::ActionEntry::builder("shortcuts")
+        .activate(|win: &adw::ApplicationWindow, _, _| shortcuts_dialog().present(Some(win)))
+        .build();
     let ui = w.clone();
     let page = gio::ActionEntry::builder("page")
         .parameter_type(Some(glib::VariantTy::STRING))
@@ -438,10 +413,11 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
         .build();
     w.ctx
         .window
-        .add_action_entries([off, release, about, close, page]);
+        .add_action_entries([off, release, about, close, shortcuts, page]);
     app.set_accels_for_action("win.page::device", &["<Control>comma", "<Alt>5"]);
     app.set_accels_for_action("win.output-off", &["F9"]);
     app.set_accels_for_action("win.close", &["<Control>w"]);
+    app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
     for (k, name) in PAGES.iter().enumerate().take(4) {
         app.set_accels_for_action(&format!("win.page::{name}"), &[&format!("<Alt>{}", k + 1)]);
     }
@@ -459,11 +435,6 @@ fn install_window_actions(app: &adw::Application, w: &Rc<Window>) {
         })
         .build();
     app.add_action_entries([show]);
-
-    let shortcuts = gtk::Builder::from_string(SHORTCUTS)
-        .object::<gtk::ShortcutsWindow>("help_overlay")
-        .expect("shortcuts window in the builder string");
-    w.ctx.window.set_help_overlay(Some(&shortcuts));
 
     let ctx = w.ctx.clone();
     w.reconnect
@@ -585,7 +556,7 @@ fn build(
     device_section.append(Some("_Release Front Panel"), Some("win.release"));
     menu.append_section(None, &device_section);
     let app_section = gio::Menu::new();
-    app_section.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
+    app_section.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
     app_section.append(Some("_About DP100 Studio"), Some("win.about"));
     menu.append_section(None, &app_section);
     header.pack_end(
