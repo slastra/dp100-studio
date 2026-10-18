@@ -37,3 +37,7 @@
 .lanes > button.amp:checked { color: @dp_amp; }
 .lanes > button.watt:checked { color: @dp_watt; }
 .lanes > button.heat:checked { color: @dp_heat; }
+
+/* A reading's headroom bar in the reading's colour. */
+progressbar.volt > trough > progress { background-color: @dp_volt; }
+progressbar.amp > trough > progress { background-color: @dp_amp; }

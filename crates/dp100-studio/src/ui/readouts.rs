@@ -79,6 +79,9 @@ impl Channel {
         );
         b.append(&line);
         let bar = gtk::ProgressBar::new();
+        // Added, not set: setting the classes would drop the bar's own
+        // "horizontal", which gives it its height.
+        bar.add_css_class(ink.class());
         b.append(&bar);
         (
             Self {

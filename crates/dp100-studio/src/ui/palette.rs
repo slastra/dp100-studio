@@ -31,6 +31,16 @@ impl Ink {
         }
     }
 
+    /// The style class for things drawn in this colour.
+    pub fn class(self) -> &'static str {
+        match self {
+            Ink::Volt => "volt",
+            Ink::Amp => "amp",
+            Ink::Watt => "watt",
+            Ink::Heat => "heat",
+        }
+    }
+
     fn hex(self, dark: bool) -> u32 {
         let (light, dark_shade) = self.shades();
         if dark { dark_shade } else { light }
