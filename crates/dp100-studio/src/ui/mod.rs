@@ -509,6 +509,16 @@ fn install_breakpoint(w: &Rc<Window>) {
         }
     });
 
+    // Side by side but not wide: the panel and the graph's toolbar on one
+    // line need about 960 px, so the toolbar stacks. A range of its own,
+    // so it never overlaps the narrow breakpoint above.
+    let bp = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("min-width: 761sp and max-width: 1000sp")
+            .expect("valid condition"),
+    );
+    w.readouts.narrow_layout(&bp);
+    w.ctx.window.add_breakpoint(bp);
+
     // Dialogs adapt to their own width.
     let bp = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 560sp").expect("valid condition"),
