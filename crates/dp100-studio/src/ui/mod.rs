@@ -561,7 +561,7 @@ fn build(
     let menu = gio::Menu::new();
     let pages_section = gio::Menu::new();
     pages_section.append(Some("_Presets"), Some("win.page::presets"));
-    pages_section.append(Some("_Sequences"), Some("win.page::sequences"));
+    pages_section.append(Some("Edit _Sequence"), Some("win.page::sequences"));
     pages_section.append(Some("_Recording"), Some("win.page::log"));
     pages_section.append(Some("_Device Settings"), Some("win.page::device"));
     menu.append_section(None, &pages_section);
@@ -627,8 +627,10 @@ fn build(
     header.pack_end(&power);
 
     // The panel: readings and setpoints, a running sequence, the preset.
-    readouts.add_under_readings(&sequences.card);
     readouts.add_under_setpoints(&presets.recall);
+    readouts
+        .pane
+        .insert_child_after(&sequences.card, Some(&presets.recall));
     let panel = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .width_request(readouts::PANEL_WIDTH)
@@ -664,12 +666,10 @@ fn build(
     };
     let (presets_page, bp) = page(presets.root.upcast_ref(), "600sp");
     presets.narrow_layout(&bp);
-    let (sequences_page, bp) = page(sequences.root.upcast_ref(), "700sp");
-    sequences.narrow_layout(&bp);
     let (log_page, bp) = page(log.root.upcast_ref(), "600sp");
     log.narrow_layout(&bp);
     let presets_dialog = page_dialog("Presets", &presets_page, 720);
-    let sequences_dialog = page_dialog("Sequences", &sequences_page, 800);
+    let sequences_dialog = page_dialog("Edit Sequence", &sequences.root, 800);
     let log_dialog = page_dialog("Recording", &log_page, 560);
     let device_dialog = adw::PreferencesDialog::builder()
         .title("Device Settings")
@@ -940,13 +940,13 @@ impl Window {
                         "sequence",
                         "Sequence Finished",
                         &format!("“{name}” ran to the end"),
-                        "sequences",
+                        "monitor",
                     ),
                     crate::seq::exec::Outcome::Aborted(why) => self.notify(
                         "sequence",
                         "Sequence Stopped",
                         &format!("“{name}”: {why}"),
-                        "sequences",
+                        "monitor",
                     ),
                     crate::seq::exec::Outcome::Running => {}
                 }

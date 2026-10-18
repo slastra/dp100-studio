@@ -81,12 +81,23 @@ sleep "${SHOT_DELAY:-3}"
 # wlrctl only moves relative to the cursor, which sway starts in the middle
 # of the output. Pin it to the top-left corner first so positions are
 # absolute.
-if [ -n "${SHOT_POINTER:-}${SHOT_CLICKS:-}" ]; then
+if [ -n "${SHOT_POINTER:-}${SHOT_CLICKS:-}${SHOT_SCROLL:-}" ]; then
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move -10000 -10000
 fi
 if [ -n "${SHOT_POINTER:-}" ]; then
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move $SHOT_POINTER
     sleep 0.5
+fi
+# SHOT_SCROLL="X Y DY" scrolls by DY wheel steps with the pointer at X Y,
+# before any clicks (for controls below a scrolled panel's fold).
+if [ -n "${SHOT_SCROLL:-}" ]; then
+    read -r SX SY SDY <<<"$SHOT_SCROLL"
+    read -r PX PY <<<"${SHOT_POINTER:-0 0}"
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer move $((SX-PX)) $((SY-PY))
+    sleep 0.3
+    XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY="$DISP" wlrctl pointer scroll "$SDY" 0
+    sleep 0.6
+    SHOT_POINTER="$SX $SY"
 fi
 # SHOT_CLICKS="X Y;X Y;..." clicks at each absolute position in turn.
 if [ -n "${SHOT_CLICKS:-}" ]; then

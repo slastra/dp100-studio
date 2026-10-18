@@ -1,6 +1,7 @@
-//! The step editor: a dialog with Cancel and Save in its header bar and the
-//! step's fields beneath. Durations are checked as they are typed; one that
-//! doesn't parse is marked and Save waits until it does.
+//! The step editor: a step's fields, opened in place under its row in the
+//! list. Each change applies as it is made, as the setpoints do. Durations
+//! are checked as they are typed; one that doesn't parse is marked, and
+//! nothing applies until it does.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -83,9 +84,9 @@ impl DurField {
 
 type Read = Box<dyn Fn() -> Result<Step, String>>;
 
-/// Builds the fields for `step` into `group` and returns how to read them
-/// back, plus the duration fields to watch.
-fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>>) {
+/// Builds the fields for `step`, handing each to `add`, and returns how to
+/// read them back, plus the duration fields to watch.
+fn fields(step: &Step, add: &dyn Fn(&gtk::Widget)) -> (Read, Vec<Rc<DurField>>) {
     match step.clone() {
         Step::Set { voltage, current } => {
             let use_v = adw::SwitchRow::builder()
@@ -113,10 +114,10 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 .bind_property("active", &i, "sensitive")
                 .sync_create()
                 .build();
-            group.add(&use_v);
-            group.add(&v);
-            group.add(&use_i);
-            group.add(&i);
+            add(use_v.upcast_ref());
+            add(v.upcast_ref());
+            add(use_i.upcast_ref());
+            add(i.upcast_ref());
             (
                 Box::new(move || {
                     Ok(Step::Set {
@@ -133,7 +134,7 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 .subtitle("Off turns the output off")
                 .active(on)
                 .build();
-            group.add(&s);
+            add(s.upcast_ref());
             (
                 Box::new(move || Ok(Step::Output { on: s.is_active() })),
                 Vec::new(),
@@ -141,7 +142,7 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
         }
         Step::Wait { duration } => {
             let d = DurField::new("Duration", Some(duration), false);
-            group.add(&d.row);
+            add(d.row.upcast_ref());
             let r = d.clone();
             (
                 Box::new(move || {
@@ -195,12 +196,12 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 vv.set_subtitle(unit(t.selected() == 1));
                 ss.set_subtitle(unit(t.selected() == 1));
             });
-            group.add(&t);
-            group.add(&v);
-            group.add(&d.row);
-            group.add(&use_step);
-            group.add(&size);
-            group.add(&iv.row);
+            add(t.upcast_ref());
+            add(v.upcast_ref());
+            add(d.row.upcast_ref());
+            add(use_step.upcast_ref());
+            add(size.upcast_ref());
+            add(iv.row.upcast_ref());
             let (dd, ii) = (d.clone(), iv.clone());
             (
                 Box::new(move || {
@@ -268,11 +269,11 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 o.upcast_ref(),
                 v.upcast_ref(),
             ] {
-                group.add(r);
+                add(r);
             }
-            group.add(&h.row);
-            group.add(&t.row);
-            group.add(&ot);
+            add(h.row.upcast_ref());
+            add(t.row.upcast_ref());
+            add(ot.upcast_ref());
             let (hh, tt) = (h.clone(), t.clone());
             (
                 Box::new(move || {
@@ -317,10 +318,10 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 .bind_property("active", &i, "sensitive")
                 .sync_create()
                 .build();
-            group.add(&p);
-            group.add(&v);
-            group.add(&use_i);
-            group.add(&i);
+            add(p.upcast_ref());
+            add(v.upcast_ref());
+            add(use_i.upcast_ref());
+            add(i.upcast_ref());
             (
                 Box::new(move || {
                     Ok(Step::Power {
@@ -335,7 +336,7 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
         Step::Repeat { count } => {
             let c = spin("Times", 0.0, 100_000.0, 1.0, 0, f64::from(count));
             c.set_subtitle("0 repeats until you stop it");
-            group.add(&c);
+            add(c.upcast_ref());
             (
                 Box::new(move || {
                     Ok(Step::Repeat {
@@ -349,109 +350,38 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
     }
 }
 
-/// Opens the editor. `save` gets the edited step; `cancel` runs if the user
-/// backs out (used to remove a step that was only just added).
-pub fn open(
-    parent: &impl IsA<gtk::Widget>,
-    title: &str,
-    step: &Step,
-    save: impl Fn(Step) + 'static,
-    cancel: impl Fn() + 'static,
-) {
-    let group = adw::PreferencesGroup::new();
-    let (read, durations) = fields(step, &group);
-
-    let cancel_button = gtk::Button::with_label("Cancel");
-    let save_button = gtk::Button::builder()
-        .label("Save")
-        .css_classes(["suggested-action"])
-        .build();
-    let header = adw::HeaderBar::builder()
-        .show_start_title_buttons(false)
-        .show_end_title_buttons(false)
-        .build();
-    header.pack_start(&cancel_button);
-    header.pack_end(&save_button);
-
-    let page = adw::PreferencesPage::new();
-    page.add(&group);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&header);
-    view.set_content(Some(&page));
-
-    let dialog = adw::Dialog::builder()
-        .title(title)
-        .content_width(440)
-        .child(&view)
-        .build();
-    dialog.set_default_widget(Some(&save_button));
-
-    // Mark bad durations as they are typed; Save waits for all to parse.
-    let check = {
-        let durations = durations.clone();
-        let save_button = save_button.clone();
-        move || {
-            let mut ok = true;
-            for d in &durations {
-                if d.read().is_err() {
-                    d.row.add_css_class("error");
-                    ok = false;
-                } else {
-                    d.row.remove_css_class("error");
-                }
+/// Puts `step`'s fields under `row`, applying each change as it is made:
+/// `apply` gets the step whenever the fields read as a whole one.
+pub fn expand(row: &adw::ExpanderRow, step: &Step, apply: impl Fn(Step) + 'static) {
+    let made = RefCell::new(Vec::new());
+    let (read, durations) = fields(step, &|w: &gtk::Widget| {
+        row.add_row(w);
+        made.borrow_mut().push(w.clone());
+    });
+    let changed = Rc::new(move || {
+        let mut ok = true;
+        for d in &durations {
+            if d.read().is_err() {
+                d.row.add_css_class("error");
+                ok = false;
+            } else {
+                d.row.remove_css_class("error");
             }
-            save_button.set_sensitive(ok);
         }
-    };
-    for d in &durations {
-        let check = check.clone();
-        d.row.connect_changed(move |_| check());
-    }
-    check();
-
-    let saved = Rc::new(RefCell::new(false));
-    let d = dialog.clone();
-    let s = saved.clone();
-    save_button.connect_clicked(move |_| {
-        if let Ok(step) = read() {
-            *s.borrow_mut() = true;
-            save(step);
-            d.close();
+        if ok && let Ok(step) = read() {
+            apply(step);
         }
     });
-    let d = dialog.clone();
-    cancel_button.connect_clicked(move |_| {
-        d.close();
-    });
-    dialog.connect_closed(move |_| {
-        if !*saved.borrow() {
-            cancel();
+    for w in made.into_inner() {
+        let c = changed.clone();
+        if let Some(r) = w.downcast_ref::<adw::SpinRow>() {
+            r.connect_value_notify(move |_| c());
+        } else if let Some(r) = w.downcast_ref::<adw::SwitchRow>() {
+            r.connect_active_notify(move |_| c());
+        } else if let Some(r) = w.downcast_ref::<adw::ComboRow>() {
+            r.connect_selected_notify(move |_| c());
+        } else if let Some(r) = w.downcast_ref::<adw::EntryRow>() {
+            r.connect_changed(move |_| c());
         }
-    });
-    dialog.present(Some(parent));
-    // Start in the first field, its text selected, so a value can be typed
-    // straight over.
-    if let Some(first) = durations.first() {
-        first.row.grab_focus();
-        first.row.select_region(0, -1);
-    } else if let Some(row) = first_focusable(&group) {
-        row.grab_focus();
     }
-}
-
-fn first_focusable(group: &adw::PreferencesGroup) -> Option<gtk::Widget> {
-    let mut stack = vec![group.clone().upcast::<gtk::Widget>()];
-    while let Some(w) = stack.pop() {
-        if w.is::<adw::SpinRow>() || w.is::<adw::ComboRow>() || w.is::<adw::SwitchRow>() {
-            return Some(w);
-        }
-        let mut children = Vec::new();
-        let mut c = w.first_child();
-        while let Some(child) = c {
-            c = child.next_sibling();
-            children.push(child);
-        }
-        stack.extend(children.into_iter().rev());
-    }
-    None
 }

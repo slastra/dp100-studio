@@ -1,11 +1,11 @@
-//! The Sequences page.
+//! Sequences: running them from the main window, and editing them in a
+//! dialog.
 //!
-//! It opens with a run panel in the same form as the Monitor page's: lamps
-//! for the sequence's state, Run and Stop as the panel's action, the
-//! sequence's name (click it to switch), and figures that describe it when
-//! idle and follow it when running. Below that, the steps read as a
-//! timeline, each with a type chip and repeat blocks drawn as rails, then
-//! the sequence's settings.
+//! The main window's panel has a card to pick a sequence, see whether it
+//! can run, and run or stop it, following it while it runs. Its menu makes,
+//! copies, imports, exports and deletes them. The editor lists the steps,
+//! each opening in place to change it, any problems with them, then the
+//! sequence's settings.
 //!
 //! Sequences are TOML files in `$XDG_DATA_HOME/dp100-studio/sequences`,
 //! saved on every change. Each edit re-runs the checks against the
@@ -25,7 +25,6 @@ use gtk::{gio, glib};
 
 use super::ctx::Ctx;
 use super::log::clock;
-use super::panel::{Panel, Tone, figure, footer};
 use crate::seq::exec::{Outcome, Status};
 use crate::seq::schema::{Cmp, Dur, Metric, OnAbort, OnTimeout, RampTarget, Sequence, Step};
 use crate::seq::validate::{DeviceLimits, Report, estimate, validate};
@@ -105,17 +104,6 @@ fn fresh_path(dir: &Path) -> PathBuf {
         .expect("some name is free")
 }
 
-const LAMPS: [(&str, &str, Tone); 4] = [
-    ("READY", "The checks pass; it can run", Tone::Ok),
-    ("RUNNING", "A run is in progress", Tone::Info),
-    ("WARN", "There are warnings to look at", Tone::Warn),
-    (
-        "ERROR",
-        "It can't run until the errors are fixed",
-        Tone::Alert,
-    ),
-];
-
 /// The steps the Add Step menu offers, and what each starts as.
 fn new_step(kind: &str) -> Option<Step> {
     let d = |s| Dur(Duration::from_secs(s));
@@ -152,39 +140,36 @@ fn new_step(kind: &str) -> Option<Step> {
     })
 }
 
-struct Figure {
-    tile: gtk::Box,
-    caption: gtk::Label,
-    value: gtk::Label,
-    /// The channel colour it carries when idle, if any.
-    class: &'static str,
-}
-
 pub struct Sequences {
+    /// The editor, for its dialog: problems, steps and settings.
     pub root: adw::PreferencesPage,
-    /// For the main window's panel while a sequence runs: what it is
-    /// doing, how far along it is, and Stop.
-    pub card: gtk::Box,
-    card_title: gtk::Label,
-    card_now: gtk::Label,
-    card_progress: gtk::ProgressBar,
-    panel: Panel,
+    /// For the main window's panel: the sequence to run, whether it can,
+    /// Run and Stop, and while it runs, how far along it is.
+    pub card: adw::PreferencesGroup,
+    picker: adw::ComboRow,
+    /// The file menu, locked with the picker while a sequence runs.
+    more: gtk::MenuButton,
+    names: gtk::StringList,
+    progress_row: gtk::ListBoxRow,
+    progress: gtk::ProgressBar,
+    elapsed: gtk::Label,
+    status: adw::ActionRow,
+    status_icon: gtk::Image,
+    status_spinner: gtk::Spinner,
     run: gtk::Button,
     run_content: adw::ButtonContent,
-    title: gtk::Label,
-    picker: gtk::MenuButton,
-    picker_list: gtk::ListBox,
-    meta: gtk::Label,
-    progress: gtk::ProgressBar,
-    figures: [Figure; 4],
-    issues: gtk::Box,
+    issues_group: adw::PreferencesGroup,
+    issue_rows: RefCell<Vec<adw::ActionRow>>,
     steps_group: adw::PreferencesGroup,
     step_rows: RefCell<Vec<adw::PreferencesRow>>,
+    /// The step open in the list, kept open when the list is rebuilt.
+    expanded: Cell<Option<usize>>,
     name: adw::EntryRow,
     on_abort: adw::ComboRow,
     limits: adw::ExpanderRow,
     max_v: adw::SpinRow,
     max_i: adw::SpinRow,
+    /// What edits the open sequence, locked while it runs.
     editors: Vec<gtk::Widget>,
     files: RefCell<Vec<(PathBuf, String)>>,
     doc: RefCell<Option<(PathBuf, Sequence)>>,
@@ -198,114 +183,101 @@ pub struct Sequences {
 
 impl Sequences {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = adw::PreferencesPage::new();
+        // --- the card, for the main window ---
+        let names = gtk::StringList::new(&[]);
+        let picker = adw::ComboRow::builder()
+            .title("Sequence")
+            .model(&names)
+            .build();
+        let progress = gtk::ProgressBar::builder().hexpand(true).build();
+        let elapsed = gtk::Label::builder()
+            .css_classes(["dim-label", "numeric", "caption"])
+            .build();
+        let progress_box = gtk::Box::builder()
+            .spacing(12)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        progress_box.append(&progress);
+        progress_box.append(&elapsed);
+        let progress_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&progress_box)
+            .visible(false)
+            .build();
+        let status_icon = gtk::Image::new();
+        let status_spinner = gtk::Spinner::builder().visible(false).build();
+        let status = adw::ActionRow::builder().use_markup(false).build();
+        status.add_suffix(&status_spinner);
+        status.add_suffix(&status_icon);
 
-        // --- the run panel ---
+        let file_menu = gio::Menu::new();
+        let make = gio::Menu::new();
+        make.append(Some("_New Sequence"), Some("seq.new"));
+        make.append(Some("_Duplicate"), Some("seq.duplicate"));
+        file_menu.append_section(None, &make);
+        let share = gio::Menu::new();
+        share.append(Some("_Import…"), Some("seq.import"));
+        share.append(Some("_Export…"), Some("seq.export"));
+        file_menu.append_section(None, &share);
+        let gone = gio::Menu::new();
+        gone.append(Some("De_lete"), Some("seq.delete"));
+        file_menu.append_section(None, &gone);
+        let more = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .menu_model(&file_menu)
+            .tooltip_text("New, Duplicate, Import, Export, Delete")
+            .valign(gtk::Align::Center)
+            .build();
+        more.update_property(&[gtk::accessible::Property::Label("Sequence files")]);
+        let edit_button = gtk::Button::builder()
+            .label("Edit")
+            .action_name("win.page")
+            .action_target(&"sequences".to_variant())
+            .valign(gtk::Align::Center)
+            .tooltip_text("Change the Steps and Settings")
+            .build();
         let run_content = adw::ButtonContent::builder()
             .icon_name("media-playback-start-symbolic")
             .label("Run")
             .build();
         let run = gtk::Button::builder()
             .child(&run_content)
-            .css_classes(["pill"])
+            .css_classes(["suggested-action"])
             .valign(gtk::Align::Center)
             .build();
-        let panel = Panel::new(&LAMPS, Some(run.upcast_ref()));
-
-        let title = gtk::Label::builder()
-            .css_classes(["title-1"])
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .xalign(0.0)
-            .build();
-        let title_box = gtk::Box::builder().spacing(8).build();
-        title_box.append(&title);
-        title_box.append(&gtk::Image::from_icon_name("pan-down-symbolic"));
-        let picker_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["navigation-sidebar"])
-            .build();
-        let new_button = gtk::Button::builder()
-            .child(
-                &adw::ButtonContent::builder()
-                    .icon_name("list-add-symbolic")
-                    .label("New Sequence")
-                    .build(),
-            )
-            .css_classes(["flat"])
-            .build();
-        let popover_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
+        let buttons = gtk::Box::builder()
             .spacing(6)
-            .width_request(280)
+            .halign(gtk::Align::End)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(12)
+            .margin_end(12)
             .build();
-        popover_box.append(
-            &gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .propagate_natural_height(true)
-                .max_content_height(360)
-                .child(&picker_list)
-                .build(),
-        );
-        popover_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        popover_box.append(&new_button);
-        let popover = gtk::Popover::builder().child(&popover_box).build();
-        let picker = gtk::MenuButton::builder()
-            .child(&title_box)
-            .popover(&popover)
-            .css_classes(["flat", "seq-picker"])
-            .tooltip_text("Switch Sequence or Start a New One")
-            .halign(gtk::Align::Start)
+        buttons.append(&edit_button);
+        buttons.append(&more);
+        buttons.append(&run);
+        let buttons_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&buttons)
             .build();
-        let meta = gtk::Label::builder()
-            .css_classes(["dim-label"])
-            .xalign(0.0)
-            .wrap(true)
+        let card = adw::PreferencesGroup::new();
+        card.add(&picker);
+        card.add(&progress_row);
+        card.add(&status);
+        card.add(&buttons_row);
+
+        // --- the editor, for its dialog ---
+        let root = adw::PreferencesPage::new();
+        let issues_group = adw::PreferencesGroup::builder()
+            .title("Problems")
+            .visible(false)
             .build();
-        let head = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .build();
-        head.append(&picker);
-        head.append(&meta);
-        panel.body.append(&head);
 
-        let progress = gtk::ProgressBar::builder().visible(false).build();
-        panel.body.append(&progress);
-
-        let foot = footer();
-        let mk = |caption: &str, class: &'static str| {
-            let (value, b) = figure(caption, class);
-            let caption = b
-                .first_child()
-                .and_downcast::<gtk::Label>()
-                .expect("figure starts with its caption");
-            super::panel::add_to_flow(&foot, &b);
-            Figure {
-                tile: b,
-                caption,
-                value,
-                class,
-            }
-        };
-        let figures = [
-            mk("STEPS", "plain"),
-            mk("LENGTH", "plain"),
-            mk("UP TO", "volt"),
-            mk("LIMIT UP TO", "amp"),
-        ];
-        panel.body.append(&foot);
-
-        let issues = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .build();
-        panel.body.append(&issues);
-
-        let pg = adw::PreferencesGroup::new();
-        pg.add(&panel.root);
-        root.add(&pg);
-
-        // --- steps ---
         let add_menu = gio::Menu::new();
         for (label, kind) in [
             ("Set Voltage and Current", "set"),
@@ -332,12 +304,14 @@ impl Sequences {
             .build();
         let steps_group = adw::PreferencesGroup::builder()
             .title("Steps")
-            .description("Run top to bottom; click a step to change it")
+            .description("Run top to bottom; open a step to change it")
             .header_suffix(&add)
             .build();
         root.add(&steps_group);
+        // Under the steps, so appearing as a step is changed can't move the
+        // step under the pointer.
+        root.add(&issues_group);
 
-        // --- settings ---
         let sg = adw::PreferencesGroup::builder().title("Settings").build();
         let name = adw::EntryRow::builder().title("Name").build();
         let on_abort = adw::ComboRow::builder()
@@ -370,88 +344,33 @@ impl Sequences {
         sg.add(&limits);
         root.add(&sg);
 
-        let delete = gtk::Button::builder()
-            .label("Delete Sequence")
-            .css_classes(["pill", "destructive-action"])
-            .halign(gtk::Align::Center)
-            .build();
-        let dg = adw::PreferencesGroup::new();
-        dg.add(&delete);
-        root.add(&dg);
-
         let editors: Vec<gtk::Widget> = vec![
-            picker.clone().upcast(),
             add.clone().upcast(),
             name.clone().upcast(),
             on_abort.clone().upcast(),
             limits.clone().upcast(),
-            delete.clone().upcast(),
+            edit_button.upcast(),
         ];
-
-        let card_title = gtk::Label::builder()
-            .css_classes(["heading"])
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        let card_now = gtk::Label::builder()
-            .css_classes(["dim-label"])
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        let card_progress = gtk::ProgressBar::new();
-        let card_stop = gtk::Button::builder()
-            .label("Stop")
-            .css_classes(["destructive-action"])
-            .tooltip_text("Stop the Sequence")
-            .build();
-        let card_show = gtk::Button::builder()
-            .label("Show")
-            .action_name("win.page")
-            .action_target(&"sequences".to_variant())
-            .build();
-        let card_buttons = gtk::Box::builder()
-            .spacing(6)
-            .halign(gtk::Align::End)
-            .build();
-        card_buttons.append(&card_show);
-        card_buttons.append(&card_stop);
-        let card_inner = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .margin_top(12)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        card_inner.append(&card_title);
-        card_inner.append(&card_now);
-        card_inner.append(&card_progress);
-        card_inner.append(&card_buttons);
-        let card = gtk::Box::builder()
-            .css_classes(["card"])
-            .visible(false)
-            .build();
-        card.append(&card_inner);
-        card_inner.set_hexpand(true);
 
         let p = Rc::new(Self {
             root,
             card,
-            card_title,
-            card_now,
-            card_progress,
-            panel,
+            picker,
+            more,
+            names,
+            progress_row,
+            progress,
+            elapsed,
+            status,
+            status_icon,
+            status_spinner,
             run,
             run_content,
-            title,
-            picker,
-            picker_list,
-            meta,
-            progress,
-            figures,
-            issues,
+            issues_group,
+            issue_rows: RefCell::new(Vec::new()),
             steps_group,
             step_rows: RefCell::new(Vec::new()),
+            expanded: Cell::new(None),
             name,
             on_abort,
             limits,
@@ -467,6 +386,7 @@ impl Sequences {
             ctx,
         });
 
+        // The card's menu and the editor's Add Step share these.
         let actions = gio::SimpleActionGroup::new();
         let w = Rc::downgrade(&p);
         let add_action = gio::ActionEntry::builder("add")
@@ -477,28 +397,40 @@ impl Sequences {
                 }
             })
             .build();
-        actions.add_action_entries([add_action]);
+        let file_action = |name: &str, f: fn(&Rc<Self>)| {
+            let w = Rc::downgrade(&p);
+            gio::ActionEntry::builder(name)
+                .activate(move |_: &gio::SimpleActionGroup, _, _| {
+                    if let Some(p) = w.upgrade() {
+                        f(&p);
+                    }
+                })
+                .build()
+        };
+        actions.add_action_entries([
+            add_action,
+            file_action("new", Self::create),
+            file_action("duplicate", Self::duplicate),
+            file_action("import", Self::import),
+            file_action("export", Self::export),
+            file_action("delete", Self::delete),
+        ]);
         p.root.insert_action_group("seq", Some(&actions));
+        p.card.insert_action_group("seq", Some(&actions));
 
         let w = Rc::downgrade(&p);
-        p.picker_list.connect_row_activated(move |_, row| {
-            if let Some(p) = w.upgrade() {
-                p.picker.popdown();
+        p.picker.connect_selected_notify(move |c| {
+            if let Some(p) = w.upgrade()
+                && !p.loading.get()
+            {
                 let path = p
                     .files
                     .borrow()
-                    .get(row.index() as usize)
+                    .get(c.selected() as usize)
                     .map(|(f, _)| f.clone());
                 if let Some(path) = path {
                     p.open(&path);
                 }
-            }
-        });
-        let w = Rc::downgrade(&p);
-        new_button.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.picker.popdown();
-                p.create();
             }
         });
         let w = Rc::downgrade(&p);
@@ -537,22 +469,8 @@ impl Sequences {
         p.max_i.connect_value_notify(move |_| limits_changed());
 
         let w = Rc::downgrade(&p);
-        delete.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.delete();
-            }
-        });
-        let w = Rc::downgrade(&p);
         p.run.connect_clicked(move |_| {
             if let Some(p) = w.upgrade() {
-                p.run_or_stop();
-            }
-        });
-        let w = Rc::downgrade(&p);
-        card_stop.connect_clicked(move |_| {
-            if let Some(p) = w.upgrade()
-                && p.running.get()
-            {
                 p.run_or_stop();
             }
         });
@@ -566,28 +484,15 @@ impl Sequences {
         self.running.get()
     }
 
-    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
-        self.panel.narrow_layout(bp, Some(self.run.upcast_ref()));
-    }
-
     // ---- files ----
 
     /// Re-reads the folder and opens `select`, or the first sequence.
     fn reload(self: &Rc<Self>, select: Option<&Path>) {
         let files = list(&sequences_dir());
-        while let Some(row) = self.picker_list.row_at_index(0) {
-            self.picker_list.remove(&row);
-        }
-        for (_, name) in &files {
-            let l = gtk::Label::builder()
-                .label(name)
-                .xalign(0.0)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .margin_top(6)
-                .margin_bottom(6)
-                .build();
-            self.picker_list.append(&l);
-        }
+        let labels: Vec<&str> = files.iter().map(|(_, n)| n.as_str()).collect();
+        self.loading.set(true);
+        self.names.splice(0, self.names.n_items(), &labels);
+        self.loading.set(false);
         let path = select
             .map(Path::to_path_buf)
             .filter(|s| files.iter().any(|(p, _)| p == s))
@@ -618,13 +523,30 @@ impl Sequences {
                 *self.doc.borrow_mut() = None;
             }
         }
+        if let Some(k) = self.files.borrow().iter().position(|(p, _)| p == path) {
+            self.loading.set(true);
+            self.picker.set_selected(k as u32);
+            self.loading.set(false);
+        }
+        self.expanded.set(None);
         self.show_doc();
     }
 
-    fn create(self: &Rc<Self>) {
+    /// Saves `seq` as a new file in the folder and opens it.
+    fn add_file(self: &Rc<Self>, seq: &Sequence) -> Option<PathBuf> {
         let dir = sequences_dir();
         let _ = fs::create_dir_all(&dir);
         let path = fresh_path(&dir);
+        if let Err(e) = save(&path, seq) {
+            self.ctx.error(&format!("Couldn't save the sequence: {e}"));
+            return None;
+        }
+        self.reload(Some(&path));
+        Some(path)
+    }
+
+    /// Starts a new sequence and opens it to edit.
+    fn create(self: &Rc<Self>) {
         let mut seq = Sequence::new("New sequence");
         seq.steps = vec![
             Step::Set {
@@ -637,13 +559,115 @@ impl Sequences {
             },
             Step::Output { on: false },
         ];
-        if let Err(e) = save(&path, &seq) {
-            self.ctx
-                .error(&format!("Couldn't create the sequence: {e}"));
-            return;
+        if self.add_file(&seq).is_some() {
+            self.card
+                .activate_action("win.page", Some(&"sequences".to_variant()))
+                .ok();
+            self.name.grab_focus();
         }
-        self.reload(Some(&path));
-        self.name.grab_focus();
+    }
+
+    fn duplicate(self: &Rc<Self>) {
+        let Some((_, mut seq)) = self.doc.borrow().clone() else {
+            return;
+        };
+        seq.sequence.name = format!("{} (copy)", seq.sequence.name);
+        if self.add_file(&seq).is_some() {
+            self.ctx.toast(&format!("Made “{}”", seq.sequence.name));
+        }
+    }
+
+    fn toml_filter() -> gio::ListStore {
+        let f = gtk::FileFilter::new();
+        f.set_name(Some("Sequences"));
+        f.add_suffix("toml");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&f);
+        filters
+    }
+
+    /// Copies a sequence file from anywhere into the folder.
+    fn import(self: &Rc<Self>) {
+        let dialog = gtk::FileDialog::builder()
+            .title("Import a Sequence")
+            .filters(&Self::toml_filter())
+            .build();
+        let p = self.clone();
+        dialog.open(
+            Some(&self.ctx.window),
+            gio::Cancellable::NONE,
+            move |file| {
+                let Some(path) = file.ok().and_then(|f| f.path()) else {
+                    return;
+                };
+                match fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| Sequence::from_toml(&t))
+                {
+                    Ok(seq) => {
+                        if p.add_file(&seq).is_some() {
+                            p.ctx.toast(&format!("Imported “{}”", seq.sequence.name));
+                        }
+                    }
+                    Err(e) => p.ctx.error(&format!(
+                        "Couldn't import {}: {e}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default()
+                    )),
+                }
+            },
+        );
+    }
+
+    /// Saves the open sequence to a file of the user's choosing.
+    fn export(self: &Rc<Self>) {
+        let Some((_, seq)) = self.doc.borrow().clone() else {
+            return;
+        };
+        let slug: String = seq
+            .sequence
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        let dialog = gtk::FileDialog::builder()
+            .title("Export the Sequence")
+            .initial_name(format!(
+                "{}.toml",
+                if slug.is_empty() { "sequence" } else { &slug }
+            ))
+            .filters(&Self::toml_filter())
+            .build();
+        let ctx = self.ctx.clone();
+        dialog.save(
+            Some(&self.ctx.window),
+            gio::Cancellable::NONE,
+            move |file| {
+                let Some(path) = file.ok().and_then(|f| f.path()) else {
+                    return;
+                };
+                match save(&path, &seq) {
+                    Ok(()) => ctx.toast(&format!(
+                        "Exported to {}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default()
+                    )),
+                    Err(e) => ctx.error(&format!("Couldn't export it: {e}")),
+                }
+            },
+        );
     }
 
     fn delete(self: &Rc<Self>) {
@@ -684,17 +708,17 @@ impl Sequences {
             }
         }
         if renamed {
-            // Keep the title and the picker in step without rebuilding rows
-            // under the user's cursor.
-            if let Some((path, seq)) = self.doc.borrow().as_ref() {
-                self.title.set_label(&seq.sequence.name);
-                if let Some(k) = self.files.borrow().iter().position(|(p, _)| p == path)
-                    && let Some(row) = self.picker_list.row_at_index(k as i32)
-                    && let Some(l) = row.child().and_downcast::<gtk::Label>()
-                {
-                    l.set_label(&seq.sequence.name);
-                }
-                if let Some(entry) = self.files.borrow_mut().iter_mut().find(|(p, _)| p == path) {
+            // Keep the picker in step without rebuilding the rows under the
+            // user's cursor.
+            if let Some((path, seq)) = self.doc.borrow().as_ref()
+                && let Some(k) = self.files.borrow().iter().position(|(p, _)| p == path)
+            {
+                self.loading.set(true);
+                self.names
+                    .splice(k as u32, 1, &[seq.sequence.name.as_str()]);
+                self.picker.set_selected(k as u32);
+                self.loading.set(false);
+                if let Some(entry) = self.files.borrow_mut().get_mut(k) {
                     entry.1 = seq.sequence.name.clone();
                 }
             }
@@ -704,13 +728,43 @@ impl Sequences {
         }
     }
 
+    /// A step's fields changed: saves it and updates its row in place, so
+    /// the step being edited stays open.
+    fn edit_live(&self, k: usize, step: Step) {
+        if self.loading.get() || self.running.get() {
+            return;
+        }
+        {
+            let mut doc = self.doc.borrow_mut();
+            let Some((path, seq)) = doc.as_mut() else {
+                return;
+            };
+            if seq.steps.get(k) == Some(&step) {
+                return;
+            }
+            seq.steps[k] = step.clone();
+            if let Err(e) = save(path, seq) {
+                self.ctx.error(&format!("Couldn't save: {e}"));
+            }
+        }
+        if let Some(row) = self.step_rows.borrow().get(k)
+            && let Some(row) = row.downcast_ref::<adw::ExpanderRow>()
+        {
+            let (title, detail) = line(&step);
+            row.set_title(&title);
+            row.set_subtitle(detail.as_deref().unwrap_or(""));
+            if let Some(chip_label) = find_marked(row, "step-chip").and_downcast::<gtk::Label>() {
+                chip_label.set_label(chip(&step).0);
+            }
+        }
+        self.refresh_checks();
+    }
+
     // ---- display ----
 
     fn show_doc(self: &Rc<Self>) {
         self.loading.set(true);
-        let has = self.doc.borrow().is_some();
         if let Some((_, seq)) = self.doc.borrow().as_ref() {
-            self.title.set_label(&seq.sequence.name);
             self.name.set_text(&seq.sequence.name);
             self.on_abort.set_selected(match seq.sequence.on_abort {
                 OnAbort::OutputOff => 0,
@@ -721,14 +775,24 @@ impl Sequences {
             self.max_v.set_value(seq.limits.max_voltage.unwrap_or(30.0));
             self.max_i.set_value(seq.limits.max_current.unwrap_or(5.0));
         } else {
-            self.title.set_label("No sequences");
             self.name.set_text("");
         }
-        for w in &self.editors[2..] {
-            w.set_sensitive(has && !self.running.get());
-        }
         self.loading.set(false);
+        self.lock();
         self.show_steps();
+    }
+
+    /// Editing is for a sequence that is open and not running.
+    fn lock(&self) {
+        let free = self.doc.borrow().is_some() && !self.running.get();
+        for w in &self.editors {
+            w.set_sensitive(free);
+        }
+        self.picker.set_sensitive(!self.running.get());
+        self.more.set_sensitive(!self.running.get());
+        for r in self.step_rows.borrow().iter() {
+            r.set_sensitive(free);
+        }
     }
 
     fn show_steps(self: &Rc<Self>) {
@@ -744,7 +808,7 @@ impl Sequences {
                 .title(if doc.is_some() {
                     "No steps yet; add one with Add Step"
                 } else {
-                    "Start one with New Sequence, under the name above"
+                    "No sequence; start one with New Sequence"
                 })
                 .css_classes(["dim-label"])
                 .build();
@@ -754,77 +818,55 @@ impl Sequences {
         let n = steps.len();
         for (k, step) in steps.iter().enumerate() {
             let depth = report.depth.get(k).copied().unwrap_or(0);
-            let row = self.step_row(k, n, step, depth, &report);
+            let row = self.step_row(k, n, step, depth);
             self.steps_group.add(&row);
-            rows.push(row.upcast());
+            rows.push(row);
         }
         drop(doc);
         *self.step_rows.borrow_mut() = rows;
+        self.lock();
         self.mark_current();
         self.refresh_checks();
     }
 
+    /// A step as a row of the list: its number, an indent per repeat it is
+    /// inside, its kind, what it does, and tools to move or remove it. Open
+    /// it to change it in place.
     fn step_row(
         self: &Rc<Self>,
         k: usize,
         n: usize,
         step: &Step,
         depth: usize,
-        report: &Report,
-    ) -> adw::ActionRow {
+    ) -> adw::PreferencesRow {
         let (title, detail) = line(step);
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .activatable(!matches!(step, Step::End))
-            .css_classes(["step-row"])
-            .build();
-        // Set after construction: as builder properties they may be applied
-        // before use-markup is off, and step text contains "<".
-        row.set_title(&title);
-        if let Some(d) = detail {
-            row.set_subtitle(&d);
-        }
-
-        // Prefix: the step number, a rail per enclosing repeat, the chip.
-        let prefix = gtk::Box::builder()
-            .spacing(0)
-            .valign(gtk::Align::Fill)
-            .build();
-        // "step-number" marks it for mark_steps; it has no style of its own.
-        let number = gtk::Label::builder()
-            .label((k + 1).to_string())
-            .css_classes(["step-number", "numeric", "dim-label"])
-            .width_chars(2)
-            .xalign(1.0)
-            .margin_end(10)
-            .valign(gtk::Align::Center)
-            .build();
-        prefix.append(&number);
+        let prefix = gtk::Box::builder().valign(gtk::Align::Center).build();
+        // "step-number" and "step-chip" mark them to find again; they have
+        // no style of their own.
+        prefix.append(
+            &gtk::Label::builder()
+                .label((k + 1).to_string())
+                .css_classes(["step-number", "numeric", "dim-label"])
+                .width_chars(2)
+                .xalign(1.0)
+                .margin_end(10)
+                .build(),
+        );
         for _ in 0..depth {
             // Indented a step for each repeat it is inside.
             prefix.append(&gtk::Box::builder().width_request(18).build());
         }
-        let (legend, class) = chip(step);
         prefix.append(
             &gtk::Label::builder()
-                .label(legend)
-                .css_classes(["step-chip", class])
-                .valign(gtk::Align::Center)
+                .label(chip(step).0)
+                .css_classes(["step-chip", "caption-heading"])
                 .width_chars(6)
                 .xalign(0.0)
                 .build(),
         );
-        row.add_prefix(&prefix);
-
-        if report.errors.iter().any(|e| e.step == Some(k)) {
-            number.add_css_class("error");
-        } else if report.warnings.iter().any(|e| e.step == Some(k)) {
-            number.add_css_class("warning");
-        }
 
         let tools = gtk::Box::builder()
             .spacing(2)
-            .css_classes(["step-tools"])
             .valign(gtk::Align::Center)
             .build();
         let tool = |icon: &str, tip: &str, enabled: bool| {
@@ -845,18 +887,16 @@ impl Sequences {
         let up = tool("go-up-symbolic", "Move Up", k > 0);
         let down = tool("go-down-symbolic", "Move Down", k + 1 < n);
         let remove = tool("user-trash-symbolic", "Remove Step", true);
-        row.add_suffix(&tools);
-
         let w = Rc::downgrade(self);
         up.connect_clicked(move |_| {
             if let Some(p) = w.upgrade() {
-                p.edit(|s| s.steps.swap(k, k - 1));
+                p.move_step(k, k - 1);
             }
         });
         let w = Rc::downgrade(self);
         down.connect_clicked(move |_| {
             if let Some(p) = w.upgrade() {
-                p.edit(|s| s.steps.swap(k, k + 1));
+                p.move_step(k, k + 1);
             }
         });
         let w = Rc::downgrade(self);
@@ -865,32 +905,66 @@ impl Sequences {
                 p.remove_step(k);
             }
         });
+
+        // A repeat's end has nothing to change.
+        if matches!(step, Step::End) {
+            let row = adw::ActionRow::builder().use_markup(false).build();
+            row.set_title(&title);
+            row.add_prefix(&prefix);
+            row.add_suffix(&tools);
+            return row.upcast();
+        }
+        let row = adw::ExpanderRow::builder().use_markup(false).build();
+        // Set after construction: as builder properties they may be applied
+        // before use-markup is off, and step text contains "<".
+        row.set_title(&title);
+        if let Some(d) = detail {
+            row.set_subtitle(&d);
+        }
+        row.add_prefix(&prefix);
+        row.add_suffix(&tools);
         let w = Rc::downgrade(self);
-        row.connect_activated(move |_| {
+        editor::expand(&row, step, move |new| {
             if let Some(p) = w.upgrade() {
-                p.edit_step(k, false);
+                p.edit_live(k, new);
             }
         });
-        row
+        row.set_expanded(self.expanded.get() == Some(k));
+        let w = Rc::downgrade(self);
+        row.connect_expanded_notify(move |r| {
+            if let Some(p) = w.upgrade() {
+                if r.is_expanded() {
+                    p.expanded.set(Some(k));
+                } else if p.expanded.get() == Some(k) {
+                    p.expanded.set(None);
+                }
+            }
+        });
+        row.upcast()
     }
 
-    /// Marks the step a run is on by its number in the accent colour.
+    /// Marks the step a run is on by its number in the accent colour, and
+    /// steps with problems by theirs in the problem's.
     fn mark_current(&self) {
         let current = self.current.get().filter(|_| self.running.get());
+        let report = self.report();
         for (k, r) in self.step_rows.borrow().iter().enumerate() {
             let Some(n) = find_number(r) else { continue };
             let on = Some(k) == current;
-            for class in ["accent", "heading"] {
-                if on {
+            let error = report.errors.iter().any(|e| e.step == Some(k));
+            let warning = !error && report.warnings.iter().any(|e| e.step == Some(k));
+            for (class, set) in [
+                ("accent", on),
+                ("heading", on),
+                ("error", error && !on),
+                ("warning", warning && !on),
+                ("dim-label", !on && !error && !warning),
+            ] {
+                if set {
                     n.add_css_class(class);
                 } else {
                     n.remove_css_class(class);
                 }
-            }
-            if on {
-                n.remove_css_class("dim-label");
-            } else {
-                n.add_css_class("dim-label");
             }
         }
     }
@@ -918,107 +992,110 @@ impl Sequences {
             .unwrap_or_default()
     }
 
-    /// Re-checks against the device's present limits and updates the panel.
-    /// Called on edits and when the device's protection changes.
-    pub fn refresh_checks(&self) {
-        while let Some(c) = self.issues.first_child() {
-            self.issues.remove(&c);
+    /// The card's status row: an icon at its end in the colour of how it
+    /// is going, a title, and the detail behind it.
+    fn show_status(&self, icon: Option<(&str, &str)>, title: &str, detail: &str) {
+        self.status_spinner.set_visible(icon.is_none());
+        self.status_spinner.set_spinning(icon.is_none());
+        self.status_icon.set_visible(icon.is_some());
+        if let Some((name, class)) = icon {
+            self.status_icon.set_icon_name(Some(name));
+            self.status_icon.set_css_classes(&[class]);
         }
+        self.status.set_title(title);
+        self.status.set_subtitle(detail);
+    }
+
+    /// Re-checks against the device's present limits and updates the card
+    /// and the editor's problems. Called on edits and when the device's
+    /// protection changes.
+    pub fn refresh_checks(&self) {
+        for r in self.issue_rows.borrow_mut().drain(..) {
+            self.issues_group.remove(&r);
+        }
+        self.mark_current();
         let doc = self.doc.borrow();
         let Some((_, seq)) = doc.as_ref() else {
-            self.meta.set_label("Sequences you make are kept here");
-            for k in 0..4 {
-                self.panel.lamp(k, false);
-            }
+            self.issues_group.set_visible(false);
+            self.picker.set_subtitle("");
+            self.show_status(
+                Some(("document-new-symbolic", "dim-label")),
+                "No sequences yet",
+                "Start one with New Sequence, in the menu below",
+            );
             self.run.set_sensitive(false);
-            for f in &self.figures {
-                f.value.set_label("--");
-            }
             return;
         };
         let report = validate(seq, &self.limits_now());
         let length = estimate(seq);
         self.length.set(length);
 
-        if !self.running.get() {
-            self.show_idle_figures(seq, &report, length);
-        }
-        let ready = report.ok();
-        self.panel.lamp(0, ready && !self.running.get());
-        self.panel.lamp(2, !report.warnings.is_empty());
-        self.panel.lamp(3, !report.errors.is_empty());
-
-        let issue = |icon: &str, class: &str, text: &str| {
-            let b = gtk::Box::builder().spacing(10).css_classes([class]).build();
-            b.append(
+        let mut rows = Vec::new();
+        for (icon, class, text) in report
+            .errors
+            .iter()
+            .map(|e| ("dialog-error-symbolic", "error", &e.text))
+            .chain(
+                report
+                    .warnings
+                    .iter()
+                    .map(|w| ("dialog-warning-symbolic", "warning", &w.text)),
+            )
+        {
+            let r = adw::ActionRow::builder().use_markup(false).build();
+            r.set_title(text.strip_suffix('.').unwrap_or(text));
+            r.set_title_lines(0);
+            r.add_prefix(
                 &gtk::Image::builder()
                     .icon_name(icon)
-                    .valign(gtk::Align::Start)
+                    .css_classes([class])
                     .build(),
             );
-            b.append(
-                &gtk::Label::builder()
-                    .label(text.strip_suffix('.').unwrap_or(text))
-                    .wrap(true)
-                    .xalign(0.0)
-                    .hexpand(true)
-                    .build(),
-            );
-            self.issues.append(&b);
-        };
-        for e in &report.errors {
-            issue("dialog-error-symbolic", "error", &e.text);
+            self.issues_group.add(&r);
+            rows.push(r);
         }
-        for w in &report.warnings {
-            issue("dialog-warning-symbolic", "warning", &w.text);
-        }
-        if !self.running.get() {
-            self.run.set_sensitive(ready);
-        }
-    }
+        self.issues_group.set_visible(!rows.is_empty());
+        *self.issue_rows.borrow_mut() = rows;
 
-    fn show_idle_figures(&self, seq: &Sequence, report: &Report, length: Option<Duration>) {
-        let n = seq.steps.len();
-        let set = |k: usize, caption: &str, value: &str| {
-            self.figures[k].caption.set_label(caption);
-            self.figures[k].value.set_label(value);
+        if self.running.get() {
+            return;
+        }
+        self.picker.set_subtitle(&summary(seq, &report, length));
+        let first = |list: &[crate::seq::validate::Issue]| {
+            list.first()
+                .map(|i| i.text.strip_suffix('.').unwrap_or(&i.text).to_owned())
+                .unwrap_or_default()
         };
-        set(0, "STEPS", &n.to_string());
-        set(
-            1,
-            "LENGTH",
-            &match length {
-                Some(d) if d.is_zero() => "instant".to_owned(),
-                Some(d) => format!("≈ {}", short(d)),
-                None => "until stopped".to_owned(),
-            },
-        );
-        let until = seq
-            .steps
-            .iter()
-            .any(|s| matches!(s, Step::WaitUntil { .. }));
-        self.figures[1].value.set_tooltip_text(until.then_some(
-            "Counting each wait-until step as met at once; a real run takes as long as they take",
-        ));
-        if report.turns_on {
-            set(2, "UP TO", &format!("{:.2}\u{202f}V", report.max_voltage));
-            set(
-                3,
-                "LIMIT UP TO",
-                &format!("{:.3}\u{202f}A", report.max_current),
+        let plural = |n: usize, one: &str| {
+            if n == 1 {
+                format!("1 {one}")
+            } else {
+                format!("{n} {one}s")
+            }
+        };
+        if !report.errors.is_empty() {
+            self.show_status(
+                Some(("dialog-error-symbolic", "error")),
+                &format!("Can't run: {}", plural(report.errors.len(), "problem")),
+                &first(&report.errors),
+            );
+        } else if !report.warnings.is_empty() {
+            self.show_status(
+                Some(("dialog-warning-symbolic", "warning")),
+                &format!("Ready, with {}", plural(report.warnings.len(), "warning")),
+                &first(&report.warnings),
             );
         } else {
-            set(2, "UP TO", "off");
-            set(3, "LIMIT UP TO", "off");
+            self.show_status(
+                Some(("object-select-symbolic", "success")),
+                "Ready to run",
+                match seq.sequence.on_abort {
+                    OnAbort::OutputOff => "Turns the output off if stopped early",
+                    OnAbort::Leave => "Leaves the output alone if stopped early",
+                },
+            );
         }
-        self.meta.set_label(&format!(
-            "{n} step{} · {}",
-            if n == 1 { "" } else { "s" },
-            match seq.sequence.on_abort {
-                OnAbort::OutputOff => "turns the output off if stopped early",
-                OnAbort::Leave => "leaves the output alone if stopped early",
-            }
-        ));
+        self.run.set_sensitive(report.ok());
     }
 
     // ---- editing steps ----
@@ -1028,13 +1105,11 @@ impl Sequences {
             return;
         };
         let repeat = matches!(step, Step::Repeat { .. });
-        let k = {
-            let doc = self.doc.borrow();
-            let Some((_, s)) = doc.as_ref() else {
-                return;
-            };
-            s.steps.len()
+        let Some(k) = self.doc.borrow().as_ref().map(|(_, s)| s.steps.len()) else {
+            return;
         };
+        // A new step opens, ready to change.
+        self.expanded.set(Some(k));
         self.edit(|s| {
             s.steps.push(step);
             if repeat {
@@ -1044,8 +1119,16 @@ impl Sequences {
                 s.steps.push(Step::End);
             }
         });
-        // A new step opens in its editor; backing out removes it again.
-        self.edit_step(k, true);
+    }
+
+    /// Swaps two neighbouring steps; an open one stays open as it moves.
+    fn move_step(self: &Rc<Self>, from: usize, to: usize) {
+        match self.expanded.get() {
+            Some(k) if k == from => self.expanded.set(Some(to)),
+            Some(k) if k == to => self.expanded.set(Some(from)),
+            _ => {}
+        }
+        self.edit(|s| s.steps.swap(from, to));
     }
 
     fn remove_step(self: &Rc<Self>, k: usize) {
@@ -1059,6 +1142,7 @@ impl Sequences {
                 _ => None,
             })
         };
+        self.expanded.set(None);
         self.edit(|s| {
             let mut gone = vec![k];
             gone.extend(partner);
@@ -1067,57 +1151,6 @@ impl Sequences {
                 s.steps.remove(i);
             }
         });
-    }
-
-    /// Backs out a step that was only just added: for a new repeat, the
-    /// whole block it came with.
-    fn discard_new(self: &Rc<Self>, k: usize) {
-        let end = {
-            let doc = self.doc.borrow();
-            doc.as_ref().and_then(|(_, s)| match s.steps.get(k) {
-                Some(Step::Repeat { .. }) => matching_end(&s.steps, k),
-                _ => None,
-            })
-        };
-        self.edit(|s| {
-            s.steps.drain(k..=end.unwrap_or(k));
-        });
-    }
-
-    fn edit_step(self: &Rc<Self>, k: usize, is_new: bool) {
-        if self.running.get() {
-            return;
-        }
-        let Some(step) = self
-            .doc
-            .borrow()
-            .as_ref()
-            .and_then(|(_, s)| s.steps.get(k).cloned())
-        else {
-            return;
-        };
-        if matches!(step, Step::End) {
-            return;
-        }
-        let (legend, _) = chip(&step);
-        let title = if is_new {
-            format!("New {} Step", titlecase(legend))
-        } else {
-            format!("Step {}", k + 1)
-        };
-        let p = self.clone();
-        let p2 = self.clone();
-        editor::open(
-            &self.ctx.window,
-            &title,
-            &step,
-            move |new| p.edit(|s| s.steps[k] = new),
-            move || {
-                if is_new {
-                    p2.discard_new(k);
-                }
-            },
-        );
     }
 
     // ---- running ----
@@ -1158,71 +1191,31 @@ impl Sequences {
         if self.running.replace(on) == on {
             return;
         }
-        let has = self.doc.borrow().is_some();
-        for (i, w) in self.editors.iter().enumerate() {
-            w.set_sensitive(!on && (i < 2 || has));
-        }
-        for r in self.step_rows.borrow().iter() {
-            r.set_activatable(!on);
-            if let Some(tools) = find_tools(r) {
-                tools.set_sensitive(!on);
-            }
-        }
-        self.panel.lamp(1, on);
-        self.progress.set_visible(on);
-        self.card.set_visible(on);
-        // The channel stripes describe the sequence's extent; while running
-        // the tiles count time, so they go neutral.
-        for f in &self.figures {
-            if on {
-                f.tile.remove_css_class(f.class);
-            } else {
-                f.tile.add_css_class(f.class);
-            }
-        }
+        self.lock();
+        self.progress_row.set_visible(on);
         if on {
             self.run_content.set_label("Stop");
             self.run_content
                 .set_icon_name("media-playback-stop-symbolic");
+            self.run.remove_css_class("suggested-action");
             self.run.add_css_class("destructive-action");
             self.run.set_sensitive(true);
-            self.panel.lamp(0, false);
         } else {
             self.run_content.set_label("Run");
             self.run_content
                 .set_icon_name("media-playback-start-symbolic");
             self.run.remove_css_class("destructive-action");
+            self.run.add_css_class("suggested-action");
             self.current.set(None);
-            self.mark_current();
             self.refresh_checks();
         }
     }
 
-    pub fn show_progress(&self, name: &str, st: &Status) {
+    pub fn show_progress(&self, _name: &str, st: &Status) {
         self.set_running(true);
-        self.current.set(Some(st.step));
-        self.mark_current();
-
-        let set = |k: usize, caption: &str, value: &str| {
-            self.figures[k].caption.set_label(caption);
-            self.figures[k].value.set_label(value);
-        };
-        set(0, "STEP", &format!("{} of {}", st.step + 1, st.steps));
-        set(1, "ELAPSED", &clock(st.elapsed));
-        match (st.remaining, st.condition) {
-            (Some(r), true) => set(2, "GIVES UP IN", &clock(r)),
-            (Some(r), false) => set(2, "STEP LEFT", &clock(r)),
-            (None, _) => set(2, "STEP LEFT", "--"),
+        if self.current.replace(Some(st.step)) != Some(st.step) {
+            self.mark_current();
         }
-        set(
-            3,
-            "PASS",
-            &match st.pass {
-                Some((pass, 0)) => pass.to_string(),
-                Some((pass, of)) => format!("{pass} of {of}"),
-                None => "--".to_owned(),
-            },
-        );
         let now = self
             .doc
             .borrow()
@@ -1232,17 +1225,31 @@ impl Sequences {
         let holding = st.power.map_or(String::new(), |(_, w, _)| {
             format!(" · holding {}", crate::ui::controls::watts(w))
         });
-        self.meta.set_label(&format!("Now: {now}{holding}"));
-        self.card_title
-            .set_label(&format!("“{name}” · step {} of {}", st.step + 1, st.steps));
-        self.card_now
-            .set_label(&format!("{now}{holding} · {}", clock(st.elapsed)));
+        let left = match (st.remaining, st.condition) {
+            (Some(r), true) => format!("gives up in {}", clock(r)),
+            (Some(r), false) => format!("{} left", clock(r)),
+            (None, _) => String::new(),
+        };
+        let pass = match st.pass {
+            Some((pass, 0)) => format!("pass {pass}"),
+            Some((pass, of)) => format!("pass {pass} of {of}"),
+            None => String::new(),
+        };
+        let detail: Vec<String> = [format!("{now}{holding}"), left, pass]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect();
+        self.show_status(
+            None,
+            &format!("Running step {} of {}", st.step + 1, st.steps),
+            &detail.join(" · "),
+        );
+        self.elapsed.set_label(&clock(st.elapsed));
         let frac = match self.length.get() {
             Some(total) if !total.is_zero() => st.elapsed.as_secs_f64() / total.as_secs_f64(),
             _ => st.step as f64 / st.steps.max(1) as f64,
         };
         self.progress.set_fraction(frac.clamp(0.0, 1.0));
-        self.card_progress.set_fraction(frac.clamp(0.0, 1.0));
     }
 
     pub fn show_ended(&self, name: &str, outcome: &Outcome) {
@@ -1255,9 +1262,25 @@ impl Sequences {
     }
 }
 
-/// The tools box added as a row suffix, found again to lock it.
-fn find_tools(row: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {
-    find_marked(row, "step-tools")
+/// What a sequence does at a glance: its steps, how long, and how far it
+/// takes the output.
+fn summary(seq: &Sequence, report: &Report, length: Option<Duration>) -> String {
+    let n = seq.steps.len();
+    let steps = format!("{n} step{}", if n == 1 { "" } else { "s" });
+    let long = match length {
+        Some(d) if d.is_zero() => "instant".to_owned(),
+        Some(d) => format!("≈ {}", short(d)),
+        None => "until stopped".to_owned(),
+    };
+    let reach = if report.turns_on {
+        format!(
+            "{:.2}\u{202f}V · {:.3}\u{202f}A",
+            report.max_voltage, report.max_current
+        )
+    } else {
+        "output stays off".to_owned()
+    };
+    format!("{steps} · {long} · {reach}")
 }
 
 fn find_number(row: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {
@@ -1312,20 +1335,6 @@ fn matching_repeat(steps: &[Step], end: usize) -> Option<usize> {
         }
     }
     None
-}
-
-fn titlecase(legend: &str) -> String {
-    match legend {
-        "SET" => "Set".into(),
-        "ON" => "Output On".into(),
-        "OFF" => "Output Off".into(),
-        "WAIT" => "Wait".into(),
-        "RAMP" => "Ramp".into(),
-        "UNTIL" => "Wait Until".into(),
-        "POWER" => "Hold Power".into(),
-        "LOOP" => "Repeat".into(),
-        other => other.into(),
-    }
 }
 
 #[cfg(test)]

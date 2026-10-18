@@ -362,12 +362,6 @@ impl Readouts {
         }
     }
 
-    /// Puts `w` in the panel under the readings, as the running sequence's
-    /// card is.
-    pub fn add_under_readings(&self, w: &impl IsA<gtk::Widget>) {
-        self.pane.insert_child_after(w, Some(&self.panel.root));
-    }
-
     /// Puts `w` in the panel under the setpoints.
     pub fn add_under_setpoints(&self, w: &impl IsA<gtk::Widget>) {
         self.pane
