@@ -3,13 +3,9 @@
  * Stock libadwaita throughout. What is left here is what libadwaita has no
  * class for: tabular figures, the annunciator lamps' LEDs, and the graph's
  * lane toggles in their lanes' colours. (The main readings are drawn, in
- * segments.rs.)
+ * segments.rs.) The dp_ colours come from palette.rs, a shade per style.
  */
 
-@define-color dp_volt #3584e4;
-@define-color dp_amp #ff7800;
-@define-color dp_watt #9141ac;
-@define-color dp_heat #26a269;
 
 .numeric {
   font-feature-settings: "tnum";

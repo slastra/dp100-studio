@@ -5,6 +5,7 @@ mod graph;
 mod history;
 mod log;
 mod page;
+mod palette;
 mod panel;
 mod presets;
 mod readouts;
@@ -180,12 +181,17 @@ fn demo_sim() -> Source {
 
 fn load_css() {
     let css = gtk::CssProvider::new();
-    css.load_from_string(include_str!("style.css"));
+    let load = |css: &gtk::CssProvider| {
+        css.load_from_string(&format!("{}{}", palette::css(), include_str!("style.css")));
+    };
+    load(&css);
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().expect("a display"),
         &css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    // The palette has a shade for each style.
+    adw::StyleManager::default().connect_dark_notify(move |_| load(&css));
 }
 
 struct Window {

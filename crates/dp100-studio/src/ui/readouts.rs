@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use dp100::{BasicInfo, Fault, Mode, Setpoints};
-use gtk::gdk;
 
 use super::controls::Controls;
 use super::ctx::{amps, volts};
 use super::graph::{Graph, Lane};
 use super::log::{charge, energy};
+use super::palette::Ink;
 use super::panel::{Panel, Tone};
 use super::segments::SevenSeg;
 use crate::seq::power::HoldState;
@@ -47,7 +47,7 @@ struct Channel {
 impl Channel {
     /// A reading: its name with its setpoint opposite, the digits, and a
     /// bar of how much of the setpoint is in use.
-    fn new(caption: &str, unit: &'static str, color: &str) -> (Self, gtk::Box) {
+    fn new(caption: &str, unit: &'static str, ink: Ink) -> (Self, gtk::Box) {
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(6)
@@ -68,7 +68,7 @@ impl Channel {
         b.append(&head);
 
         let line = gtk::Box::builder().spacing(10).build();
-        let display = SevenSeg::new(2, 3, gdk::RGBA::parse(color).ok());
+        let display = SevenSeg::new(2, 3, Some(ink));
         line.append(&display);
         line.append(
             &gtk::Label::builder()
@@ -297,10 +297,10 @@ impl Readouts {
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
             .build();
-        // The graph's lane colours, so a reading and its trace match.
-        let (volts, b) = Channel::new("VOLTAGE", "V", "#3584e4");
+        // The DP100's own colours, as the graph's lanes have them.
+        let (volts, b) = Channel::new("VOLTAGE", "V", Ink::Volt);
         channels.append(&b);
-        let (amps, b) = Channel::new("CURRENT", "A", "#ff7800");
+        let (amps, b) = Channel::new("CURRENT", "A", Ink::Amp);
         channels.append(&b);
         panel.body.append(&channels);
 

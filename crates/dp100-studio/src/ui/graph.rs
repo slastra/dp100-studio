@@ -15,6 +15,7 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, graphene, gsk};
 
 use super::history::{Bucket, CHANNELS, History};
+use super::palette::Ink;
 
 /// The longest window, and so how much history is kept.
 pub const HISTORY: Duration = Duration::from_secs(3600);
@@ -94,19 +95,13 @@ impl Lane {
 
     /// The GNOME palette's blue, orange, purple and red.
     fn color(self) -> gdk::RGBA {
-        let (r, g, b): (u8, u8, u8) = match self {
-            Lane::Voltage => (0x35, 0x84, 0xe4),
-            Lane::Current => (0xff, 0x78, 0x00),
-            Lane::Power => (0x91, 0x41, 0xac),
-            // GNOME Green 5: red would read as a fault.
-            Lane::Temperature => (0x26, 0xa2, 0x69),
-        };
-        gdk::RGBA::new(
-            f32::from(r) / 255.0,
-            f32::from(g) / 255.0,
-            f32::from(b) / 255.0,
-            1.0,
-        )
+        match self {
+            Lane::Voltage => Ink::Volt,
+            Lane::Current => Ink::Amp,
+            Lane::Power => Ink::Watt,
+            Lane::Temperature => Ink::Heat,
+        }
+        .rgba()
     }
 
     /// Smallest full-scale range, so a flat zero line doesn't zoom into noise.
@@ -246,6 +241,14 @@ mod imp {
                 }
             });
             obj.add_controller(motion);
+            // Lane colours have a shade for each style; a paused graph
+            // wouldn't otherwise draw again.
+            let w = obj.downgrade();
+            adw::StyleManager::default().connect_dark_notify(move |_| {
+                if let Some(w) = w.upgrade() {
+                    w.queue_draw();
+                }
+            });
 
             // Scrolling follows the display's frame clock rather than sample
             // arrivals: redrawing only when a sample lands moved the chart in

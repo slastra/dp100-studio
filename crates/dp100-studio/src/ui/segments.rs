@@ -14,6 +14,8 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gsk};
 
+use super::palette::Ink;
+
 /// Digit proportions, in digit widths: height, segment thickness, the gap
 /// between a segment's end and its neighbour's, the space between digits,
 /// the decimal point's cell, and how far the digits lean.
@@ -70,7 +72,7 @@ mod imp {
         pub int: Cell<usize>,
         pub frac: Cell<usize>,
         pub shown: RefCell<Vec<char>>,
-        pub lit: Cell<Option<gdk::RGBA>>,
+        pub ink: Cell<Option<Ink>>,
     }
 
     #[glib::object_subclass]
@@ -84,7 +86,18 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for SevenSeg {}
+    impl ObjectImpl for SevenSeg {
+        fn constructed(&self) {
+            self.parent_constructed();
+            // The palette has a shade for each style.
+            let w = self.obj().downgrade();
+            adw::StyleManager::default().connect_dark_notify(move |_| {
+                if let Some(w) = w.upgrade() {
+                    w.queue_draw();
+                }
+            });
+        }
+    }
 
     impl WidgetImpl for SevenSeg {
         fn request_mode(&self) -> gtk::SizeRequestMode {
@@ -111,7 +124,7 @@ mod imp {
             }
             let fg = obj.color();
             let ghost = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.06);
-            let lit = self.lit.get().unwrap_or(fg);
+            let lit = self.ink.get().map_or(fg, Ink::rgba);
             let (dark, bright) = (gsk::PathBuilder::new(), gsk::PathBuilder::new());
 
             let shown = self.shown.borrow();
@@ -230,13 +243,13 @@ glib::wrapper! {
 
 impl SevenSeg {
     /// A display of `int` digits before the point and `frac` after, lit in
-    /// `color` (or the text colour).
-    pub fn new(int: usize, frac: usize, color: Option<gdk::RGBA>) -> Self {
+    /// `ink` (or the text colour).
+    pub fn new(int: usize, frac: usize, ink: Option<Ink>) -> Self {
         let d: Self = glib::Object::new();
         let imp = d.imp();
         imp.int.set(int);
         imp.frac.set(frac);
-        imp.lit.set(color);
+        imp.ink.set(ink);
         imp.shown.replace(cells(None, int, frac));
         d.set_hexpand(true);
         d
