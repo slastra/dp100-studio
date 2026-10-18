@@ -11,6 +11,7 @@
 
 use std::time::{Duration, Instant};
 
+use super::power::{Hold, HoldState, PowerTarget};
 use super::schema::{
     MIN_RAMP_INTERVAL, Metric, OnAbort, OnTimeout, RAMP_INTERVAL, RampTarget, Sequence, Step,
 };
@@ -107,6 +108,9 @@ pub struct Status {
     /// Passes of the innermost loop: (this pass, of how many; 0 = forever).
     pub pass: Option<(u32, u32)>,
     pub elapsed: Duration,
+    /// A power hold carrying on in the background: its state, the target
+    /// and the power now, in watts.
+    pub power: Option<(HoldState, f64, f64)>,
 }
 
 pub struct Run {
@@ -118,6 +122,8 @@ pub struct Run {
     ends: Vec<Option<usize>>,
     started: Instant,
     outcome: Outcome,
+    /// A power step's hold, until the next set, ramp or power step.
+    power: Option<Hold>,
 }
 
 /// Instant steps run per tick before yielding, as a guard against a loop
@@ -148,6 +154,7 @@ impl Run {
             ends,
             started: now,
             outcome: Outcome::Running,
+            power: None,
         }
     }
 
@@ -186,6 +193,10 @@ impl Run {
                 (l.pass, total)
             }),
             elapsed: now.saturating_duration_since(self.started),
+            power: self
+                .power
+                .as_ref()
+                .map(|h| (h.state(), h.want().power, h.power())),
         }
     }
 
@@ -194,6 +205,7 @@ impl Run {
         if self.outcome != Outcome::Running {
             return;
         }
+        self.power = None;
         let mut why = why.to_owned();
         if self.seq.sequence.on_abort == OnAbort::OutputOff
             && let Err(e) = t.output(false)
@@ -208,9 +220,18 @@ impl Run {
         if self.outcome != Outcome::Running {
             return &self.outcome;
         }
+        if let Some(h) = &mut self.power
+            && let Err(e) = h.tick(now, m, t)
+        {
+            self.abort(&format!("Holding power failed: {e}."), t);
+            return &self.outcome;
+        }
         if let Err(e) = self.advance(now, m, t) {
             let step = self.pc + 1;
             self.abort(&format!("Step {step} failed: {e}."), t);
+        }
+        if self.outcome != Outcome::Running {
+            self.power = None;
         }
         &self.outcome
     }
@@ -223,12 +244,35 @@ impl Run {
             };
             match (self.phase, step) {
                 (Phase::Start, Step::Set { voltage, current }) => {
+                    self.power = None;
                     let (v0, i0) = t.setpoints()?;
                     t.set(voltage.map_or(v0, milli), current.map_or(i0, milli))?;
                     self.next();
                 }
                 (Phase::Start, Step::Output { on }) => {
                     t.output(on)?;
+                    self.next();
+                }
+                (
+                    Phase::Start,
+                    Step::Power {
+                        power,
+                        max_voltage,
+                        max_current,
+                    },
+                ) => {
+                    // The worker fills in max_current before a run; a dry
+                    // run without one stays inside the present limit.
+                    let (_, i0) = t.setpoints()?;
+                    let mut hold = Hold::new(PowerTarget {
+                        power,
+                        max_voltage,
+                        max_current: max_current.unwrap_or(f64::from(i0) / 1000.0),
+                    });
+                    // In place before any step after this one runs, so an
+                    // output-on next comes on at the hold's setpoints.
+                    hold.tick(now, &Measure::default(), t)?;
+                    self.power = Some(hold);
                     self.next();
                 }
                 (Phase::Start, Step::Wait { duration }) => {
@@ -253,6 +297,7 @@ impl Run {
                         step,
                     },
                 ) => {
+                    self.power = None;
                     let (v0, i0) = t.setpoints()?;
                     let from = match target {
                         RampTarget::Voltage => f64::from(v0) / 1000.0,
@@ -786,6 +831,83 @@ mod tests {
                 "step {k} at {at:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_power_step_holds_through_a_wait_and_a_set_ends_it() {
+        let t0 = Instant::now();
+        let mut run = Run::new(
+            seq(vec![
+                Step::Power {
+                    power: 1.0,
+                    max_voltage: 8.0,
+                    max_current: Some(1.0),
+                },
+                Step::Output { on: true },
+                Step::Wait {
+                    duration: secs(3.0),
+                },
+                Step::Set {
+                    voltage: Some(3.3),
+                    current: Some(0.1),
+                },
+                Step::Wait {
+                    duration: secs(1.0),
+                },
+            ]),
+            t0,
+        );
+        let mut r = Recorder {
+            v: 5_000,
+            i: 500,
+            ..Recorder::default()
+        };
+        // A 10 Ω load, measured from whatever the setpoints are.
+        let load = |r: &Recorder| {
+            let (v, i) = (f64::from(r.v) / 1000.0, f64::from(r.i) / 1000.0);
+            let (v, i, cc) = if v / 10.0 <= i {
+                (v, v / 10.0, false)
+            } else {
+                (i * 10.0, i, true)
+            };
+            Measure {
+                voltage: v,
+                current: i,
+                power: v * i,
+                on: true,
+                cc,
+                ..Measure::default()
+            }
+        };
+        let mut now = t0;
+        let mut held = false;
+        loop {
+            let m = load(&r);
+            if *run.tick(now, &m, &mut r) != Outcome::Running {
+                break;
+            }
+            let st = run.status(now);
+            if st.step == 2 && st.power.is_some_and(|p| p.0 == HoldState::Holding) {
+                held = true;
+            }
+            if st.step == 4 {
+                assert!(st.power.is_none(), "a set step ends the hold");
+            }
+            now += Duration::from_millis(50);
+            r.t = now - t0;
+        }
+        assert!(held, "held 1 W during the wait");
+        // Placed before the output came on: 8 V at 1 W / 8 V = 125 mA.
+        assert_eq!(
+            r.writes[0],
+            DryWrite::Set {
+                at: Duration::ZERO,
+                vset_mv: 8_000,
+                iset_ma: 125
+            }
+        );
+        assert!(matches!(r.writes[1], DryWrite::Output { on: true, .. }));
+        assert_eq!((r.v, r.i), (3_300, 100));
     }
 
     #[test]

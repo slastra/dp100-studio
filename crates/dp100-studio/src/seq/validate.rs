@@ -22,6 +22,8 @@ pub struct DeviceLimits {
     pub ocp: f64,
     /// The highest output the present input can supply, V.
     pub vo_max: f64,
+    /// The OPP trip, W.
+    pub opp: f64,
 }
 
 impl Default for DeviceLimits {
@@ -31,6 +33,7 @@ impl Default for DeviceLimits {
             ovp: 30.0,
             ocp: 5.0,
             vo_max: 30.0,
+            opp: 105.0,
         }
     }
 }
@@ -246,6 +249,38 @@ pub fn validate(seq: &Sequence, dev: &DeviceLimits) -> Report {
                     RampTarget::Current => c.current(k, *to),
                 }
             }
+            Step::Power {
+                power,
+                max_voltage,
+                max_current,
+            } => {
+                let imax = max_current.unwrap_or_else(|| default_current(seq, dev));
+                c.voltage(k, *max_voltage);
+                c.current(k, imax);
+                let ceiling = dev.opp.min(100.0);
+                if *power <= 0.0 {
+                    c.err(
+                        Some(k),
+                        format!("Step {}: the power needs to be above zero.", k + 1),
+                    );
+                } else if *power >= ceiling {
+                    c.err(
+                        Some(k),
+                        format!(
+                            "Step {}: {power:.2} W is at or above the over-power trip of {ceiling:.1} W.",
+                            k + 1
+                        ),
+                    );
+                } else if *power > max_voltage * imax + 1e-9 {
+                    c.err(
+                        Some(k),
+                        format!(
+                            "Step {}: {power:.2} W can't be reached within {max_voltage:.2} V and {imax:.3} A.",
+                            k + 1
+                        ),
+                    );
+                }
+            }
             Step::WaitUntil { hold, timeout, .. } => match timeout {
                 None => c.warn(
                     Some(k),
@@ -324,6 +359,27 @@ pub fn validate(seq: &Sequence, dev: &DeviceLimits) -> Report {
     }
 }
 
+/// The current a power step stays inside when it doesn't say: the tightest
+/// of the DP100's range, its trip and the sequence's own limit.
+pub fn default_current(seq: &Sequence, dev: &DeviceLimits) -> f64 {
+    let mut i = dev.ocp.min(5.0);
+    if let Some(l) = seq.limits.max_current {
+        i = i.min(l);
+    }
+    i
+}
+
+/// Fills in what a run needs that the file leaves to the device: each
+/// power step's current limit.
+pub fn resolve(seq: &mut Sequence, dev: &DeviceLimits) {
+    let i = default_current(seq, dev);
+    for s in &mut seq.steps {
+        if let Step::Power { max_current, .. } = s {
+            max_current.get_or_insert(i);
+        }
+    }
+}
+
 /// The rough length of a run with every condition met at once, or `None`
 /// for one that repeats until stopped.
 pub fn estimate(seq: &Sequence) -> Option<Duration> {
@@ -372,6 +428,7 @@ mod tests {
             ovp: 12.0,
             ocp: 2.0,
             vo_max: 8.8,
+            opp: 50.0,
         }
     }
 
@@ -390,12 +447,47 @@ mod tests {
                 "scan",
                 include_str!("../../../../examples/sequences/scan.toml"),
             ),
+            (
+                "constant-power",
+                include_str!("../../../../examples/sequences/constant-power.toml"),
+            ),
         ] {
             let s = Sequence::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             let r = validate(&s, &dev());
             assert!(r.errors.is_empty(), "{name}: {:?}", r.errors);
             assert_eq!(s.sequence.format, s.format_needed(), "{name}: format");
         }
+    }
+
+    #[test]
+    fn power_steps_are_checked() {
+        let power = |power, max_current| Step::Power {
+            power,
+            max_voltage: 5.0,
+            max_current,
+        };
+        assert!(
+            validate(&seq(vec![power(1.0, Some(0.5))]), &dev())
+                .errors
+                .is_empty()
+        );
+        let over = validate(&seq(vec![power(60.0, Some(2.0))]), &dev());
+        assert!(
+            over.errors[0].text.contains("over-power"),
+            "{:?}",
+            over.errors
+        );
+        let far = validate(&seq(vec![power(3.0, Some(0.5))]), &dev());
+        assert!(
+            far.errors[0].text.contains("can't be reached"),
+            "{:?}",
+            far.errors
+        );
+        // Without a current limit it gets the trip's: 2 A, so 9 W is fine.
+        let mut s = seq(vec![power(9.0, None)]);
+        assert!(validate(&s, &dev()).errors.is_empty());
+        resolve(&mut s, &dev());
+        assert!(matches!(s.steps[0], Step::Power { max_current: Some(i), .. } if i == 2.0));
     }
 
     #[test]

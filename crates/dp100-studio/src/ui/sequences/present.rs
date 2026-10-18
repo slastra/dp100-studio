@@ -68,6 +68,7 @@ pub fn chip(step: &Step) -> (&'static str, &'static str) {
             ..
         } => ("RAMP", "amp"),
         Step::WaitUntil { .. } => ("UNTIL", "watt"),
+        Step::Power { .. } => ("POWER", "watt"),
         Step::Repeat { .. } => ("LOOP", "info"),
         Step::End => ("END", "info"),
     }
@@ -145,6 +146,19 @@ pub fn line(step: &Step) -> (String, Option<String>) {
             });
             (title, detail.or(Some("Waits as long as it takes".into())))
         }
+        Step::Power {
+            power,
+            max_voltage,
+            max_current,
+        } => (
+            format!("Hold {power:.2}\u{202f}W"),
+            Some(match max_current {
+                Some(i) => format!(
+                    "Up to {max_voltage:.2}\u{202f}V and {i:.3}\u{202f}A, until the next set or ramp"
+                ),
+                None => format!("Up to {max_voltage:.2}\u{202f}V, until the next set or ramp"),
+            }),
+        ),
         Step::Repeat { count: 0 } => ("Until stopped".into(), None),
         Step::Repeat { count: 1 } => ("Once".into(), None),
         Step::Repeat { count } => (format!("{count} times"), None),

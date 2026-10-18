@@ -285,6 +285,46 @@ fn fields(step: &Step, group: &adw::PreferencesGroup) -> (Read, Vec<Rc<DurField>
                 vec![h, t],
             )
         }
+        Step::Power {
+            power,
+            max_voltage,
+            max_current,
+        } => {
+            let p = spin("Power (W)", 0.01, 100.0, 0.01, 2, power);
+            p.set_subtitle("Held by moving the current limit, until the next set or ramp");
+            let v = spin("Voltage limit (V)", 0.0, 30.0, 0.01, 2, max_voltage);
+            let use_i = adw::SwitchRow::builder()
+                .title("Limit the current")
+                .subtitle("Otherwise the over-current trip or the sequence's limit")
+                .active(max_current.is_some())
+                .build();
+            let i = spin(
+                "Current limit (A)",
+                0.001,
+                5.0,
+                0.001,
+                3,
+                max_current.unwrap_or(0.5),
+            );
+            use_i
+                .bind_property("active", &i, "sensitive")
+                .sync_create()
+                .build();
+            group.add(&p);
+            group.add(&v);
+            group.add(&use_i);
+            group.add(&i);
+            (
+                Box::new(move || {
+                    Ok(Step::Power {
+                        power: p.value(),
+                        max_voltage: v.value(),
+                        max_current: use_i.is_active().then(|| i.value()),
+                    })
+                }),
+                Vec::new(),
+            )
+        }
         Step::Repeat { count } => {
             let c = spin("Times", 0.0, 100_000.0, 1.0, 0, f64::from(count));
             c.set_subtitle("0 repeats until you stop it");

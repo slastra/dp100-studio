@@ -32,6 +32,12 @@
 //! # step = 0.1               # optional: exact 0.1 V increments, each held for
 //! #                          # an equal share of the duration (format 2)
 //!
+//! [[step]]                    # format 3
+//! type = "power"              # hold 2 W, moving the current limit, until
+//! power = 2.0                 # the next set, ramp or power step
+//! max_voltage = 12.0
+//! max_current = 0.5           # optional
+//!
 //! [[step]]
 //! type = "wait"
 //! duration = "2s"
@@ -57,10 +63,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// The newest file format this version reads. Format 2 added stepped
-/// ramps. A file is written as format 1 unless it uses them, so an older
-/// version still opens every sequence it would run the same way, and
-/// refuses one it would run differently.
-pub const FORMAT: u32 = 2;
+/// ramps and format 3 power steps. A file is written in the oldest format
+/// that holds what it uses, so an older version still opens every sequence
+/// it would run the same way, and refuses one it would run differently.
+pub const FORMAT: u32 = 3;
 
 /// A duration written as `"1h"`, `"2m30s"`, `"10s"`, `"250ms"`, or a bare
 /// number of seconds.
@@ -321,6 +327,17 @@ pub enum Step {
         #[serde(default)]
         on_timeout: OnTimeout,
     },
+    /// Hold a power by moving the current limit, with the voltage at
+    /// `max_voltage`. It takes no time: the hold carries on through the
+    /// steps after it until the next `set`, `ramp` or `power` step, or the
+    /// end of the sequence. `max_current` defaults to the tightest of the
+    /// DP100's 5 A, its over-current trip and this sequence's limit.
+    Power {
+        power: f64,
+        max_voltage: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_current: Option<f64>,
+    },
     /// Repeat the steps up to the matching `end`. A count of 0 repeats until
     /// stopped.
     Repeat {
@@ -368,6 +385,14 @@ impl Step {
                 }
                 s
             }
+            Step::Power {
+                power,
+                max_voltage,
+                max_current,
+            } => match max_current {
+                Some(i) => format!("Hold {power:.2} W up to {max_voltage:.2} V and {i:.3} A"),
+                None => format!("Hold {power:.2} W up to {max_voltage:.2} V"),
+            },
             Step::WaitUntil {
                 metric,
                 op,
@@ -458,11 +483,14 @@ impl Sequence {
 
     /// The oldest format that holds everything this sequence uses.
     pub fn format_needed(&self) -> u32 {
-        let stepped = self
-            .steps
-            .iter()
-            .any(|s| matches!(s, Step::Ramp { step: Some(_), .. }));
-        if stepped { 2 } else { 1 }
+        let has = |f: fn(&Step) -> bool| self.steps.iter().any(f);
+        if has(|s| matches!(s, Step::Power { .. })) {
+            3
+        } else if has(|s| matches!(s, Step::Ramp { step: Some(_), .. })) {
+            2
+        } else {
+            1
+        }
     }
 
     pub fn to_toml(&self) -> String {
@@ -565,6 +593,19 @@ timeout = "1h"
         assert!(text.contains("step = 0.1"), "{text}");
         let again = Sequence::from_toml(&text).unwrap();
         assert_eq!(again.steps, s.steps);
+    }
+
+    #[test]
+    fn power_steps_need_format_3() {
+        let mut s = Sequence::from_toml(EXAMPLE).unwrap();
+        s.steps.push(Step::Power {
+            power: 2.0,
+            max_voltage: 12.0,
+            max_current: None,
+        });
+        let text = s.to_toml();
+        assert!(text.contains("format = 3"), "{text}");
+        assert_eq!(Sequence::from_toml(&text).unwrap().steps, s.steps);
     }
 
     #[test]

@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   battery or an LED settles without overshooting. It stops on a trip, lost
   input, an unplug or a change on the panel, and leaves the output on at
   its last values.
+- A `power` sequence step holds a power the same way, and keeps holding
+  through the steps after it until a set, ramp or power step. Sequences that
+  use it are saved as format 3. `examples/sequences/constant-power.toml`
+  shows one.
 
 - Stepped ramps: a ramp with a `step` moves in exact increments, each held
   for an equal share of its duration and timed from the ramp's start, so it

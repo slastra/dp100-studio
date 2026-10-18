@@ -84,8 +84,10 @@ charger that's about 8.8 V. A 20 V PD charger gives about 19.7 V, and the full
 
 A sequence is a list of steps: set the voltage and current, turn the output
 on or off, wait, ramp a setpoint (smoothly, or in exact steps like the
-DP100's own scan mode), wait until a measurement meets a condition (say,
-current below 50 mA for 30 s), and repeat blocks. They're edited on the
+DP100's own scan mode), hold a constant power, wait until a measurement
+meets a condition (say, current below 50 mA for 30 s), and repeat blocks.
+A power step keeps holding through the steps after it, so "hold 2 W until
+the temperature reaches 60 °C" is a power step and a wait-until. They're edited on the
 Sequences page and stored as TOML; see
 [examples/sequences](examples/sequences) for the format.
 

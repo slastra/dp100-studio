@@ -1,0 +1,30 @@
+# Holds half a watt for a minute, at up to 5 V and 200 mA, then turns the
+# output off. The hold carries on through the wait; a set or ramp step, or
+# another power step, would end it.
+
+[sequence]
+name = "Hold half a watt"
+format = 3
+on_abort = "output_off"
+
+[limits]
+max_voltage = 5.0
+max_current = 0.2
+
+[[step]]
+type = "power"
+power = 0.5
+max_voltage = 5.0
+max_current = 0.2
+
+[[step]]
+type = "output"
+on = true
+
+[[step]]
+type = "wait"
+duration = "1m"
+
+[[step]]
+type = "output"
+on = false

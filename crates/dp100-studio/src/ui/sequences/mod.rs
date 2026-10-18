@@ -37,7 +37,7 @@ pub fn sequences_dir() -> PathBuf {
     glib::user_data_dir().join("dp100-studio").join("sequences")
 }
 
-const EXAMPLES: [(&str, &str); 3] = [
+const EXAMPLES: [(&str, &str); 4] = [
     (
         "voltage-sweep.toml",
         include_str!("../../../../../examples/sequences/voltage-sweep.toml"),
@@ -45,6 +45,10 @@ const EXAMPLES: [(&str, &str); 3] = [
     (
         "scan.toml",
         include_str!("../../../../../examples/sequences/scan.toml"),
+    ),
+    (
+        "constant-power.toml",
+        include_str!("../../../../../examples/sequences/constant-power.toml"),
     ),
     (
         "charge-until-full.toml",
@@ -138,6 +142,11 @@ fn new_step(kind: &str) -> Option<Step> {
             hold: Some(d(2)),
             timeout: Some(d(3600)),
             on_timeout: OnTimeout::Abort,
+        },
+        "power" => Step::Power {
+            power: 1.0,
+            max_voltage: 5.0,
+            max_current: None,
         },
         "repeat" => Step::Repeat { count: 3 },
         _ => return None,
@@ -304,6 +313,7 @@ impl Sequences {
             ("Wait", "wait"),
             ("Ramp", "ramp"),
             ("Wait Until", "until"),
+            ("Hold Power", "power"),
             ("Repeat", "repeat"),
         ] {
             add_menu.append(Some(label), Some(&format!("seq.add::{kind}")));
@@ -820,6 +830,9 @@ impl Sequences {
                 ovp: f64::from(o.ovp_mv) / 1000.0,
                 ocp: f64::from(o.ocp_ma) / 1000.0,
                 vo_max: f64::from(m.vo_max_mv) / 1000.0,
+                opp: live
+                    .system
+                    .map_or(105.0, |sys| f64::from(sys.opp_dw) / 10.0),
             },
             _ => DeviceLimits::default(),
         }
@@ -1146,7 +1159,10 @@ impl Sequences {
             .as_ref()
             .and_then(|(_, s)| s.steps.get(st.step).map(|s| line(s).0))
             .unwrap_or_else(|| st.summary.clone());
-        self.meta.set_label(&format!("Now: {now}"));
+        let holding = st.power.map_or(String::new(), |(_, w, _)| {
+            format!(" · holding {}", crate::ui::controls::watts(w))
+        });
+        self.meta.set_label(&format!("Now: {now}{holding}"));
         let frac = match self.length.get() {
             Some(total) if !total.is_zero() => st.elapsed.as_secs_f64() / total.as_secs_f64(),
             _ => st.step as f64 / st.steps.max(1) as f64,
@@ -1222,6 +1238,7 @@ fn titlecase(legend: &str) -> String {
         "WAIT" => "Wait".into(),
         "RAMP" => "Ramp".into(),
         "UNTIL" => "Wait Until".into(),
+        "POWER" => "Hold Power".into(),
         "LOOP" => "Repeat".into(),
         other => other.into(),
     }

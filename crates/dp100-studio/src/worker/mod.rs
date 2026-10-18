@@ -20,7 +20,7 @@ use crate::logging::energy::Energy;
 use crate::seq::exec::{Measure, Outcome, Run, Status as SeqStatus, Target};
 use crate::seq::power::{Hold, HoldState, PowerTarget};
 use crate::seq::schema::Sequence;
-use crate::seq::validate::{DeviceLimits, validate};
+use crate::seq::validate::{DeviceLimits, resolve, validate};
 use dp100::sim::SimHandle;
 use dp100::{
     BasicInfo, Device, DeviceInfo, Error, Fault, HidrawTransport, Mode, Options, Setpoints,
@@ -683,6 +683,7 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                         ovp: f64::from(o.ovp_mv) / 1000.0,
                         ocp: f64::from(o.ocp_ma) / 1000.0,
                         vo_max: f64::from(m.vo_max_mv) / 1000.0,
+                        opp: s.system.map_or(105.0, |sys| f64::from(sys.opp_dw) / 10.0),
                     },
                     _ => {
                         out.send(Event::Done(Err(
@@ -701,9 +702,11 @@ fn poll_session(dev: &mut Dev, cmds: &Receiver<Command>, out: &Out, s: &mut Sess
                     });
                     continue;
                 }
+                let mut seq = *seq;
+                resolve(&mut seq, &limits);
                 let now = Instant::now();
                 s.seq = Some(SeqRun {
-                    run: Run::new(*seq, now),
+                    run: Run::new(seq, now),
                     energy: Energy::new(s.interval),
                     commanded: None,
                 });
@@ -1178,6 +1181,43 @@ mod tests {
         // 0.3 W into 50 Ω is about 77 mA.
         let i = h.snapshot().live.iset_ma;
         assert!((75..=79).contains(&i), "{i} mA");
+    }
+
+    #[test]
+    fn a_sequence_holds_power_through_a_wait() {
+        let (w, h) = connected();
+        h.set_load(Some(10.0));
+        next(&w, |e| matches!(e, Event::Sample(_)));
+        w.commands
+            .send(Command::RunSequence(sequence(
+                r#"
+[[step]]
+type = "power"
+power = 1.0
+max_voltage = 8.0
+[[step]]
+type = "output"
+on = true
+[[step]]
+type = "wait"
+duration = "2s"
+"#,
+            )))
+            .unwrap();
+        next(&w, |e| {
+            matches!(e, Event::Sequence { status, .. }
+                if status.power.is_some_and(|p| p.0 == HoldState::Holding))
+        });
+        let s = h.snapshot();
+        assert_eq!(s.live.vset_mv, 8_000);
+        assert!(
+            (313..=320).contains(&s.live.iset_ma),
+            "{} mA",
+            s.live.iset_ma
+        );
+        assert_eq!(ended(&w), Outcome::Finished);
+        // Finishing ends the hold and leaves the output as it was.
+        assert!(h.snapshot().output_on);
     }
 
     #[test]
