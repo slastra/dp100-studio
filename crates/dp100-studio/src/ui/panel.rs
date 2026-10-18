@@ -36,6 +36,7 @@ pub struct Panel {
     /// stacks them.
     pub top: gtk::Box,
     pub body: gtk::Box,
+    lamp_row: gtk::FlowBox,
     lamps: Vec<gtk::Label>,
 }
 
@@ -85,6 +86,7 @@ impl Panel {
             root,
             top,
             body,
+            lamp_row: row,
             lamps,
         }
     }
@@ -101,6 +103,14 @@ impl Panel {
 
     /// On a narrow window the lamps and the action stack, the action at
     /// full width.
+    /// Puts the lamps in rows of `n`, for lamps that fall into groups of
+    /// that many.
+    pub fn lamps_per_line(&self, n: u32) {
+        self.lamp_row.set_min_children_per_line(n);
+        self.lamp_row.set_max_children_per_line(n);
+        self.lamp_row.set_homogeneous(true);
+    }
+
     /// Lays the panel out for a narrow column for good: the action under
     /// the lamps and as wide as the panel.
     pub fn compact(&self, action: Option<&gtk::Widget>) {

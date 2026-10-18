@@ -225,7 +225,7 @@ fn row(group: &adw::PreferencesGroup, title: &str) -> gtk::Label {
 }
 
 /// How wide the column of readouts and setpoints is beside the graph.
-const COLUMN_WIDTH: i32 = 430;
+const COLUMN_WIDTH: i32 = 380;
 
 pub struct Readouts {
     /// The readouts and setpoints in a column beside the graph, which fills
@@ -261,6 +261,8 @@ impl Readouts {
         // --- the instrument panel, laid out for a column ---
         let panel = Panel::new(&LAMPS, Some(controls.toggle.upcast_ref()));
         panel.compact(Some(controls.toggle.upcast_ref()));
+        // The mode and output lamps over the four trips, as two rows.
+        panel.lamps_per_line(4);
 
         let channels = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
