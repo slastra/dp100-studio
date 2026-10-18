@@ -195,8 +195,10 @@ fn graph_section(graph: &Graph) -> (gtk::Box, gtk::Box, gtk::Box) {
         .halign(gtk::Align::End)
         .build();
     let lanes = segmented();
+    lanes.add_css_class("lanes");
     for lane in Lane::ALL {
         let b = segment(lane.short());
+        b.add_css_class(lane.css_class());
         b.set_tooltip_text(Some(&format!("Show {}", lane.name())));
         b.set_active(graph.lane_shown(lane));
         let g = graph.clone();

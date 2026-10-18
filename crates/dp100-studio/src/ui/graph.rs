@@ -98,7 +98,8 @@ impl Lane {
             Lane::Voltage => (0x35, 0x84, 0xe4),
             Lane::Current => (0xff, 0x78, 0x00),
             Lane::Power => (0x91, 0x41, 0xac),
-            Lane::Temperature => (0xe0, 0x1b, 0x24),
+            // GNOME Green 5: red would read as a fault.
+            Lane::Temperature => (0x26, 0xa2, 0x69),
         };
         gdk::RGBA::new(
             f32::from(r) / 255.0,

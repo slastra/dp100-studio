@@ -1,14 +1,15 @@
 /* DP100 Studio
  *
  * Stock libadwaita throughout. What is left here is what libadwaita has no
- * class for: tabular figures and the annunciator lamps' LEDs. (The main
- * readings are drawn, in segments.rs.)
+ * class for: tabular figures, the annunciator lamps' LEDs, and the graph's
+ * lane toggles in their lanes' colours. (The main readings are drawn, in
+ * segments.rs.)
  */
 
 @define-color dp_volt #3584e4;
 @define-color dp_amp #ff7800;
 @define-color dp_watt #9141ac;
-@define-color dp_heat #e01b24;
+@define-color dp_heat #26a269;
 
 .numeric {
   font-feature-settings: "tnum";
@@ -34,3 +35,9 @@
 .lamp.lit.warn .led { background: @warning_color; box-shadow: 0 0 6px alpha(@warning_color, 0.8); }
 .lamp.lit.alert .led { background: @error_color; box-shadow: 0 0 6px alpha(@error_color, 0.8); }
 .lamp.lit.info .led { background: @accent_bg_color; box-shadow: 0 0 6px alpha(@accent_bg_color, 0.8); }
+
+/* A shown lane's toggle in the lane's colour, matching its trace. */
+.lanes > button.volt:checked { color: @dp_volt; }
+.lanes > button.amp:checked { color: @dp_amp; }
+.lanes > button.watt:checked { color: @dp_watt; }
+.lanes > button.heat:checked { color: @dp_heat; }
