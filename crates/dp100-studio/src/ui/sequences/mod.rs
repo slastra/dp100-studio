@@ -150,6 +150,9 @@ pub struct Sequences {
     /// Run and Stop, and while it runs, how far along it is.
     pub card: adw::PreferencesGroup,
     picker: adw::ComboRow,
+    /// How long the sequence takes, and how far it takes the output: under
+    /// the picker, as the readings' figures are.
+    figures: [gtk::Label; 3],
     /// The file menu, locked with the picker while a sequence runs.
     more: gtk::MenuButton,
     names: gtk::StringList,
@@ -281,8 +284,43 @@ impl Sequences {
             .selectable(false)
             .child(&buttons)
             .build();
+        let figure_row = gtk::Box::builder()
+            .homogeneous(true)
+            .spacing(12)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let figure = |caption: &str| {
+            let b = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .halign(gtk::Align::Center)
+                .build();
+            b.append(
+                &gtk::Label::builder()
+                    .label(caption)
+                    .css_classes(["caption-heading", "dim-label"])
+                    .build(),
+            );
+            let v = gtk::Label::builder()
+                .label("--")
+                .css_classes(["heading", "numeric"])
+                .build();
+            b.append(&v);
+            figure_row.append(&b);
+            v
+        };
+        let figures = [figure("LENGTH"), figure("UP TO"), figure("LIMIT UP TO")];
+        let figures_list_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&figure_row)
+            .build();
         let card = adw::PreferencesGroup::new();
         card.add(&picker);
+        card.add(&figures_list_row);
         card.add(&progress_row);
         card.add(&status);
         card.add(&buttons_row);
@@ -372,6 +410,7 @@ impl Sequences {
             root,
             card,
             picker,
+            figures,
             more,
             names,
             progress_row,
@@ -1068,6 +1107,9 @@ impl Sequences {
         let Some((_, seq)) = doc.as_ref() else {
             self.issues_group.set_visible(false);
             self.picker.set_subtitle("");
+            for f in &self.figures {
+                f.set_label("--");
+            }
             match self.broken.borrow().as_ref() {
                 Some((path, why)) => self.show_status(
                     Some(("dialog-error-symbolic", "error")),
@@ -1124,7 +1166,7 @@ impl Sequences {
         if self.running.get() || self.starting.get() {
             return;
         }
-        self.picker.set_subtitle(&summary(seq, &report, length));
+        self.show_figures(seq, &report, length);
         let first = |list: &[crate::seq::validate::Issue]| {
             list.first()
                 .map(|i| i.text.strip_suffix('.').unwrap_or(&i.text).to_owned())
@@ -1160,6 +1202,32 @@ impl Sequences {
             );
         }
         self.run.set_sensitive(report.ok());
+    }
+
+    /// The picker's step count, and the figures under it.
+    fn show_figures(&self, seq: &Sequence, report: &Report, length: Option<Duration>) {
+        let n = seq.steps.len();
+        self.picker
+            .set_subtitle(&format!("{n} step{}", if n == 1 { "" } else { "s" }));
+        self.figures[0].set_label(&match length {
+            Some(d) if d.is_zero() => "instant".to_owned(),
+            Some(d) => format!("≈ {}", short(d)),
+            None => "until stopped".to_owned(),
+        });
+        let until = seq
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::WaitUntil { .. }));
+        self.figures[0].set_tooltip_text(until.then_some(
+            "Counting each wait-until step as met at once; a real run takes as long as they take",
+        ));
+        if report.turns_on {
+            self.figures[1].set_label(&format!("{:.2}\u{202f}V", report.max_voltage));
+            self.figures[2].set_label(&format!("{:.3}\u{202f}A", report.max_current));
+        } else {
+            self.figures[1].set_label("off");
+            self.figures[2].set_label("off");
+        }
     }
 
     // ---- editing steps ----
@@ -1401,27 +1469,6 @@ impl Sequences {
             Outcome::Running => {}
         }
     }
-}
-
-/// What a sequence does at a glance: its steps, how long, and how far it
-/// takes the output.
-fn summary(seq: &Sequence, report: &Report, length: Option<Duration>) -> String {
-    let n = seq.steps.len();
-    let steps = format!("{n} step{}", if n == 1 { "" } else { "s" });
-    let long = match length {
-        Some(d) if d.is_zero() => "instant".to_owned(),
-        Some(d) => format!("≈ {}", short(d)),
-        None => "until stopped".to_owned(),
-    };
-    let reach = if report.turns_on {
-        format!(
-            "{:.2}\u{202f}V · {:.3}\u{202f}A",
-            report.max_voltage, report.max_current
-        )
-    } else {
-        "output stays off".to_owned()
-    };
-    format!("{steps} · {long} · {reach}")
 }
 
 fn find_number(row: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {

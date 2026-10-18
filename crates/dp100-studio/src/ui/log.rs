@@ -86,7 +86,7 @@ impl Log {
             .tooltip_text("Record Every Measurement to a File")
             .build();
         let panel = Panel::new(
-            &[("REC", "Recording to a file", Tone::Alert)],
+            &[("MONITORING", "Reading the DP100", Tone::Ok)],
             Some(record.upcast_ref()),
         );
         let title = gtk::Label::builder()
@@ -262,6 +262,12 @@ impl Log {
         }
     }
 
+    /// Whether the DP100 is being read, which a recording needs: the
+    /// panel's lamp. (Whether it is recording, the title already says.)
+    pub fn set_monitoring(&self, on: bool) {
+        self.panel.lamp(0, on);
+    }
+
     fn toggle(&self) {
         if self.recording.get() {
             self.ctx.command(Command::StopRecording);
@@ -278,7 +284,6 @@ impl Log {
             return;
         }
         self.rate.set_sensitive(!on);
-        self.panel.lamp(0, on);
         if on {
             self.record_content.set_label("Stop");
             self.record_content

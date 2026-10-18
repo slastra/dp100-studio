@@ -742,6 +742,7 @@ impl Window {
         // confirmation, say, describes values a reconnected one may not
         // have. And what it held is forgotten, not shown as if current.
         self.close_dialogs();
+        self.log.set_monitoring(false);
         self.readouts.disconnected();
         self.ctx.live.borrow_mut().presets.clear();
         self.presets.show_presets(&[]);
@@ -870,6 +871,7 @@ impl Window {
             },
             Event::Connected(s) => {
                 self.close_dialogs();
+                self.log.set_monitoring(true);
                 self.set_banner(None, false);
                 self.connected.set(true);
                 self.update_header();

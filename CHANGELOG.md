@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### DP100 Studio
+
+- The preset in the panel is a dropdown like the sequence's: pick another
+  to switch to it, asked first as before.
+- The Sequence card's length, voltage and current are figures of their own
+  under the picker.
+- The Recording dialog's lamp says whether the DP100 is being read.
+
 ## [0.2.0] - 2026-10-18
 
 ### DP100 Studio

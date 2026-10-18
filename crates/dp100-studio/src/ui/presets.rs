@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use dp100::Setpoints;
-use gtk::{gio, glib};
 
 use super::ctx::{Ctx, amps, milli, volts};
 use super::panel::{Panel, Tone, figure, footer};
@@ -151,9 +150,12 @@ pub struct Presets {
     /// For the main window's panel: the preset in use, and a menu to recall
     /// another.
     pub recall: adw::PreferencesGroup,
-    recall_row: adw::ActionRow,
-    recall_menu: gio::Menu,
-    recall_actions: std::cell::RefCell<Option<gio::SimpleActionGroup>>,
+    recall_row: adw::ComboRow,
+    recall_names: gtk::StringList,
+    /// The preset each of the dropdown's items stands for.
+    recall_items: std::cell::RefCell<Vec<u8>>,
+    /// The dropdown is being set by the program, not picked from.
+    syncing: Cell<bool>,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
@@ -253,20 +255,14 @@ impl Presets {
         }
         group.add(&list);
 
-        let recall_menu = gio::Menu::new();
-        let recall_row = adw::ActionRow::builder()
+        // The same stock dropdown as the Sequence card's: the preset in use,
+        // and picking another switches to it.
+        let recall_names = gtk::StringList::new(&[]);
+        let recall_row = adw::ComboRow::builder()
             .title("Preset")
-            .subtitle("Boot default")
+            .model(&recall_names)
+            .tooltip_text("Switch the DP100 to a Stored Preset")
             .build();
-        recall_row.add_suffix(
-            &gtk::MenuButton::builder()
-                .label("Recall")
-                .menu_model(&recall_menu)
-                .css_classes(["flat"])
-                .valign(gtk::Align::Center)
-                .tooltip_text("Switch the DP100 to a Stored Preset")
-                .build(),
-        );
         let recall = adw::PreferencesGroup::new();
         recall.add(&recall_row);
 
@@ -280,8 +276,9 @@ impl Presets {
             limit_caption,
             recall,
             recall_row,
-            recall_menu,
-            recall_actions: std::cell::RefCell::new(None),
+            recall_names,
+            recall_items: std::cell::RefCell::new(Vec::new()),
+            syncing: Cell::new(false),
             active: Cell::new(0),
             ctx,
         });
@@ -300,21 +297,26 @@ impl Presets {
                 }
             });
         }
-        // The recall menu's items.
-        let actions = gio::SimpleActionGroup::new();
+        // Picking a preset asks to switch, as Use does. The dropdown goes
+        // straight back to the one in use, and follows the DP100 once it
+        // has switched, so a cancelled or refused switch can't leave it
+        // showing a preset that isn't.
         let w = Rc::downgrade(&p);
-        let use_action = gio::ActionEntry::builder("use")
-            .parameter_type(Some(glib::VariantTy::BYTE))
-            .activate(move |_: &gio::SimpleActionGroup, _, v| {
-                if let (Some(p), Some(n)) = (w.upgrade(), v.and_then(|v| v.get::<u8>())) {
+        p.recall_row.connect_selected_notify(move |c| {
+            if let Some(p) = w.upgrade()
+                && !p.syncing.get()
+            {
+                let n = p.recall_items.borrow().get(c.selected() as usize).copied();
+                p.show_recall();
+                if let Some(n) = n
+                    && n != 0
+                    && n != p.active.get()
+                {
                     p.use_preset(n);
                 }
-            })
-            .build();
-        actions.add_action_entries([use_action]);
-        p.recall.insert_action_group("preset", Some(&actions));
-        p.recall_actions.replace(Some(actions));
-        p.fill_recall_menu(&[]);
+            }
+        });
+        p.show_recall();
 
         // Clicking a row edits it, unless it is the one in use.
         let w = Rc::downgrade(&p);
@@ -451,57 +453,57 @@ impl Presets {
                 }
             }
         }
-        self.fill_recall_menu(presets);
         self.show_recall();
     }
 
     /// While a sequence runs or power is held, switching presets would be
-    /// refused, so Recall's presets grey out.
+    /// refused, so the dropdown greys out.
     pub fn set_locked(&self, locked: bool) {
-        if let Some(a) = self
-            .recall_actions
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.lookup_action("use"))
-            .and_downcast::<gio::SimpleAction>()
-        {
-            a.set_enabled(!locked);
-        }
+        self.recall_row.set_sensitive(!locked);
     }
 
-    /// M1 to M9 with what each holds, then the way to edit them.
-    fn fill_recall_menu(&self, presets: &[Setpoints]) {
-        self.recall_menu.remove_all();
-        let memories = gio::Menu::new();
-        for n in 1..=9u8 {
-            let label = match presets.get(usize::from(n) - 1) {
-                Some(p) => format!("M{n}   {} · {}", volts(p.vset_mv), amps(p.iset_ma)),
-                None => format!("M{n}"),
-            };
-            let item = gio::MenuItem::new(Some(&label), None);
-            item.set_action_and_target_value(Some("preset.use"), Some(&n.to_variant()));
-            memories.append_item(&item);
-        }
-        self.recall_menu.append_section(None, &memories);
-        let edit = gio::Menu::new();
-        edit.append(Some("_Edit Presets"), Some("win.page::presets"));
-        self.recall_menu.append_section(None, &edit);
-    }
-
-    /// The recall row's subtitle: the preset in use and what it holds.
+    /// The dropdown: M1 to M9, and the boot default only while it is in
+    /// use (the DP100 can't be switched back to it), showing the preset in
+    /// use and what it holds.
     fn show_recall(&self) {
         let n = self.active.get();
+        let items: Vec<u8> = if n == 0 {
+            (0..=9).collect()
+        } else {
+            (1..=9).collect()
+        };
+        let labels: Vec<String> = items
+            .iter()
+            .map(|k| {
+                if *k == 0 {
+                    "Boot default".to_owned()
+                } else {
+                    format!("M{k}")
+                }
+            })
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        self.syncing.set(true);
+        if *self.recall_items.borrow() != items {
+            self.recall_names
+                .splice(0, self.recall_names.n_items(), &labels);
+            self.recall_items.replace(items.clone());
+        }
+        if let Some(k) = items.iter().position(|k| *k == n) {
+            self.recall_row.set_selected(k as u32);
+        }
+        self.syncing.set(false);
         let held = self
             .ctx
             .live
             .borrow()
             .presets
             .get(usize::from(n).wrapping_sub(1))
-            .map(|p| format!(" · {} · {}", volts(p.vset_mv), amps(p.iset_ma)));
-        self.recall_row.set_subtitle(&if n == 0 {
-            "Boot default".to_owned()
-        } else {
-            format!("M{n}{}", held.unwrap_or_default())
+            .map(|p| format!("{} · {}", volts(p.vset_mv), amps(p.iset_ma)));
+        self.recall_row.set_subtitle(&match (n, held) {
+            (0, _) => "Not a stored preset".to_owned(),
+            (_, Some(h)) => h,
+            (_, None) => String::new(),
         });
     }
 
