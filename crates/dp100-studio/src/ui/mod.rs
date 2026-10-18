@@ -443,6 +443,7 @@ fn install_breakpoint(w: &Rc<Window>) {
         ui.update_header();
     });
     w.readouts.narrow_layout(&bp);
+    w.presets.narrow_layout(&bp);
     w.sequences.narrow_layout(&bp);
     w.log.narrow_layout(&bp);
     w.device.narrow_layout(&bp);

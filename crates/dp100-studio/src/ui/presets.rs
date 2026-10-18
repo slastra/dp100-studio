@@ -11,41 +11,71 @@ use super::page::Page;
 use super::panel::{Panel, Tone, figure, footer};
 use crate::worker::Action;
 
-/// One preset, drawn as a memory card: its slot number, the setpoint in
-/// large figures, the trips beneath, and Use and Edit.
-struct Card {
-    root: gtk::Box,
+/// The columns of the presets table, shared by the header and every row so
+/// they line up: the slot, the four values, and the actions.
+struct Columns {
+    slot: gtk::SizeGroup,
+    actions: gtk::SizeGroup,
+}
+
+/// Lays out one line of the table: the slot, then the values in equal
+/// columns, then the actions.
+fn line(
+    cols: &Columns,
+    slot: &gtk::Widget,
+    values: &[&gtk::Widget],
+    actions: &gtk::Widget,
+) -> gtk::Box {
+    let b = gtk::Box::builder()
+        .spacing(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    slot.set_size_request(64, -1);
+    cols.slot.add_widget(slot);
+    b.append(slot);
+    let middle = gtk::Box::builder()
+        .homogeneous(true)
+        .hexpand(true)
+        .spacing(12)
+        .build();
+    for v in values {
+        middle.append(*v);
+    }
+    b.append(&middle);
+    cols.actions.add_widget(actions);
+    b.append(actions);
+    b
+}
+
+/// One preset, as a row of the table: its slot, the setpoint, the trips,
+/// and Edit and Use.
+struct Row {
+    root: gtk::ListBoxRow,
     volts: gtk::Label,
     amps: gtk::Label,
-    trips: gtk::Label,
+    ovp: gtk::Label,
+    ocp: gtk::Label,
     active: gtk::Label,
     activate: gtk::Button,
     edit: gtk::Button,
 }
 
-impl Card {
-    fn new(n: u8) -> Self {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .css_classes(["card", "preset-card"])
-            .build();
-        let head = gtk::Box::builder().spacing(6).build();
-        head.append(
+impl Row {
+    fn new(n: u8, cols: &Columns) -> Self {
+        let slot = gtk::Box::builder().spacing(8).build();
+        slot.append(
             &gtk::Label::builder()
                 .label(format!("M{n}"))
                 .css_classes(["preset-slot"])
                 .build(),
         );
         let active = gtk::Label::builder()
-            .label("ACTIVE")
+            .label("IN USE")
             .css_classes(["active-tag"])
-            .hexpand(true)
-            .halign(gtk::Align::End)
             .visible(false)
             .build();
-        head.append(&active);
-        root.append(&head);
+        slot.append(&active);
 
         let num = |classes: &[&str]| {
             gtk::Label::builder()
@@ -56,34 +86,54 @@ impl Card {
         };
         let volts = num(&["preset-volts", "numeric"]);
         let amps = num(&["preset-amps", "numeric"]);
-        let trips = num(&["preset-trips", "numeric", "dim-label"]);
-        root.append(&volts);
-        root.append(&amps);
-        root.append(&trips);
+        let ovp = num(&["numeric", "dim-label"]);
+        let ocp = num(&["numeric", "dim-label"]);
 
-        let buttons = gtk::Box::builder().spacing(6).margin_top(8).build();
         // Editing is what this page is mostly for: the presets are the
         // memories recalled from the DP100's own panel. Switching to one
         // from here is the secondary action.
         let edit = gtk::Button::builder()
             .label("Edit")
-            .hexpand(true)
-            .css_classes(["pill", "small-pill"])
+            .css_classes(["flat"])
             .tooltip_text(format!("Change What M{n} Holds"))
+            .valign(gtk::Align::Center)
             .build();
         let activate = gtk::Button::builder()
             .label("Use")
-            .css_classes(["flat", "small-pill"])
+            .css_classes(["flat"])
             .tooltip_text(format!("Switch the DP100 to M{n} Now"))
+            .valign(gtk::Align::Center)
             .build();
-        buttons.append(&edit);
-        buttons.append(&activate);
-        root.append(&buttons);
+        let actions = gtk::Box::builder()
+            .spacing(6)
+            .halign(gtk::Align::End)
+            .build();
+        actions.append(&edit);
+        actions.append(&activate);
+
+        let b = line(
+            cols,
+            slot.upcast_ref(),
+            &[
+                volts.upcast_ref(),
+                amps.upcast_ref(),
+                ovp.upcast_ref(),
+                ocp.upcast_ref(),
+            ],
+            actions.upcast_ref(),
+        );
+        b.set_margin_top(6);
+        b.set_margin_bottom(6);
+        let root = gtk::ListBoxRow::builder()
+            .child(&b)
+            .css_classes(["preset-row"])
+            .build();
         Self {
             root,
             volts,
             amps,
-            trips,
+            ovp,
+            ocp,
             active,
             activate,
             edit,
@@ -96,7 +146,9 @@ pub struct Presets {
     panel: Panel,
     title: gtk::Label,
     figures: [gtk::Label; 4],
-    rows: Vec<Card>,
+    rows: Vec<Row>,
+    /// The trip columns, which a narrow window leaves out.
+    trip_columns: Vec<gtk::Widget>,
     active: Cell<u8>,
     ctx: Rc<Ctx>,
 }
@@ -155,21 +207,46 @@ impl Presets {
         let group = adw::PreferencesGroup::builder().title("Memories").build();
         root.add(&group);
 
-        let grid = gtk::FlowBox::builder()
+        let cols = Columns {
+            slot: gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal),
+            actions: gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal),
+        };
+        let caption = |text: &str| {
+            gtk::Label::builder()
+                .label(text)
+                .css_classes(["stat-caption"])
+                .xalign(0.0)
+                .build()
+        };
+        let (h_ovp, h_ocp) = (caption("OVP"), caption("OCP"));
+        let header = line(
+            &cols,
+            caption("MEMORY").upcast_ref(),
+            &[
+                caption("VOLTAGE").upcast_ref(),
+                caption("CURRENT LIMIT").upcast_ref(),
+                h_ovp.upcast_ref(),
+                h_ocp.upcast_ref(),
+            ],
+            gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast_ref(),
+        );
+        header.set_margin_bottom(6);
+        group.add(&header);
+
+        let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .homogeneous(true)
-            .min_children_per_line(1)
-            .max_children_per_line(3)
-            .column_spacing(12)
-            .row_spacing(12)
+            .css_classes(["boxed-list"])
             .build();
         let mut rows = Vec::new();
+        let mut trip_columns: Vec<gtk::Widget> = vec![h_ovp.upcast(), h_ocp.upcast()];
         for n in 1..=9u8 {
-            let card = Card::new(n);
-            grid.append(&card.root);
-            rows.push(card);
+            let row = Row::new(n, &cols);
+            list.append(&row.root);
+            trip_columns.push(row.ovp.clone().upcast());
+            trip_columns.push(row.ocp.clone().upcast());
+            rows.push(row);
         }
-        group.add(&grid);
+        group.add(&list);
 
         let p = Rc::new(Self {
             root,
@@ -177,6 +254,7 @@ impl Presets {
             title,
             figures,
             rows,
+            trip_columns,
             active: Cell::new(0),
             ctx,
         });
@@ -195,7 +273,25 @@ impl Presets {
                 }
             });
         }
+        // Clicking a row edits it, unless it is the one in use.
+        let w = Rc::downgrade(&p);
+        list.connect_row_activated(move |_, row| {
+            if let Some(p) = w.upgrade() {
+                let n = row.index() as u8 + 1;
+                if p.active.get() != n {
+                    p.edit(n);
+                }
+            }
+        });
         p
+    }
+
+    /// On a narrow window the trips are left out of the table; Edit shows
+    /// them.
+    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
+        for w in &self.trip_columns {
+            bp.add_setter(w, "visible", Some(&false.to_value()));
+        }
     }
 
     fn use_preset(&self, n: u8) {
@@ -293,11 +389,10 @@ impl Presets {
 
     pub fn show_presets(&self, presets: &[Setpoints]) {
         for (c, p) in self.rows.iter().zip(presets) {
-            c.volts
-                .set_label(&format!("{:.2}\u{202f}V", f64::from(p.vset_mv) / 1000.0));
+            c.volts.set_label(&volts(p.vset_mv));
             c.amps.set_label(&amps(p.iset_ma));
-            c.trips
-                .set_label(&format!("OVP {} · OCP {}", volts(p.ovp_mv), amps(p.ocp_ma)));
+            c.ovp.set_label(&volts(p.ovp_mv));
+            c.ocp.set_label(&amps(p.ocp_ma));
         }
     }
 
@@ -325,8 +420,7 @@ impl Presets {
             let is = k as u8 + 1 == index;
             c.active.set_visible(is);
             c.activate.set_sensitive(!is);
-            c.activate.set_label(if is { "In use" } else { "Use" });
-            c.activate.set_visible(!is);
+            c.root.set_activatable(!is);
             if is {
                 c.root.add_css_class("active");
             } else {
