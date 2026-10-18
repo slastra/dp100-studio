@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
 ### DP100 Studio
 
 - A new window, built for a desktop. The graph fills it, beside one panel
@@ -98,5 +100,6 @@ The first release.
 - `dp100` CLI: `list`, `info`, `status`, `watch`, `set`, `on`, `off`,
   `protect`, `clear`, `preset [save|use]`, `system [set]`, `raw`.
 
-[Unreleased]: https://github.com/slastra/dp100-studio/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/slastra/dp100-studio/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/slastra/dp100-studio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/slastra/dp100-studio/releases/tag/v0.1.0

@@ -81,6 +81,18 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-10-18">
+      <description>
+        <p>A new window, built for a desktop, and constant power.</p>
+        <ul>
+          <li>The graph fills the window, beside one panel you size by dragging, with the voltage and current on seven-segment readings in the DP100's own colours</li>
+          <li>Sequences run from the panel, and are edited in place, with steps that reorder by dragging</li>
+          <li>Constant power: the app holds a power by moving the current limit, as a mode on the main window and as a sequence step</li>
+          <li>Stepped ramps, which do what the DP100's own scan mode does</li>
+          <li>Presets, recording and device settings open as dialogs</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-17">
       <description>
         <p>The first release.</p>

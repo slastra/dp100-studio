@@ -85,7 +85,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "dp100"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lexopt",
  "rustix",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "dp100-studio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "crossbeam-channel",
