@@ -107,9 +107,15 @@ mod imp {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let units = self.width_units();
             if orientation == gtk::Orientation::Horizontal {
-                (120, 360, -1, -1)
+                // It expands to whatever it is given, so asks only for its
+                // minimum: a larger natural width than a box can give makes
+                // the box measure its height inconsistently.
+                (120, 120, -1, -1)
             } else {
-                let w = if for_size > 0 { for_size } else { 360 };
+                // With no width yet, the height of the narrowest it goes:
+                // asking more than any real width gets would claim a
+                // minimum taller than the natural height.
+                let w = if for_size > 0 { for_size } else { 120 };
                 let h = (w as f32 * HEIGHT / units).ceil() as i32;
                 (h, h, -1, -1)
             }

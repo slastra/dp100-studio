@@ -4,7 +4,6 @@ mod device;
 mod graph;
 mod history;
 mod log;
-mod page;
 mod palette;
 mod panel;
 mod presets;
@@ -513,19 +512,17 @@ fn install_breakpoint(w: &Rc<Window>) {
     w.device_dialog.add_breakpoint(bp);
 }
 
+/// How wide the dialogs open, all the same.
+const DIALOG_WIDTH: i32 = 720;
+
 /// A dialog for one of the device's pages, with a header to close it by.
-fn page_dialog(
-    title: &str,
-    content: &impl IsA<gtk::Widget>,
-    width: i32,
-    height: i32,
-) -> adw::Dialog {
+fn page_dialog(title: &str, content: &impl IsA<gtk::Widget>, height: i32) -> adw::Dialog {
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(content));
     adw::Dialog::builder()
         .title(title)
-        .content_width(width)
+        .content_width(DIALOG_WIDTH)
         .content_height(height)
         .child(&view)
         .build()
@@ -665,17 +662,18 @@ fn build(
         bin.add_breakpoint(bp.clone());
         (bin, bp)
     };
-    let (presets_page, bp) = page(presets.root.widget().upcast_ref(), "600sp");
+    let (presets_page, bp) = page(presets.root.upcast_ref(), "600sp");
     presets.narrow_layout(&bp);
-    let (sequences_page, bp) = page(sequences.root.widget().upcast_ref(), "700sp");
+    let (sequences_page, bp) = page(sequences.root.upcast_ref(), "700sp");
     sequences.narrow_layout(&bp);
-    let (log_page, bp) = page(log.root.widget().upcast_ref(), "600sp");
+    let (log_page, bp) = page(log.root.upcast_ref(), "600sp");
     log.narrow_layout(&bp);
-    let presets_dialog = page_dialog("Presets", &presets_page, 860, 720);
-    let sequences_dialog = page_dialog("Sequences", &sequences_page, 1100, 800);
-    let log_dialog = page_dialog("Recording", &log_page, 760, 560);
+    let presets_dialog = page_dialog("Presets", &presets_page, 720);
+    let sequences_dialog = page_dialog("Sequences", &sequences_page, 800);
+    let log_dialog = page_dialog("Recording", &log_page, 560);
     let device_dialog = adw::PreferencesDialog::builder()
         .title("Device Settings")
+        .content_width(DIALOG_WIDTH)
         .width_request(340)
         .height_request(294)
         .build();

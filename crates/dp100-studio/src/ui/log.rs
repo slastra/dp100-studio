@@ -9,7 +9,6 @@ use adw::prelude::*;
 use gtk::gio;
 
 use super::ctx::Ctx;
-use super::page::Page;
 use super::panel::{Panel, Tone, figure, footer};
 use crate::logging::csv::sessions_dir;
 use crate::worker::{Command, RecordingStatus};
@@ -50,7 +49,7 @@ fn thousands(n: u64) -> String {
 }
 
 pub struct Log {
-    pub root: Page,
+    pub root: adw::PreferencesPage,
     /// Record in the main window's header: the same as the page's, showing
     /// how long the recording has run.
     pub header_record: gtk::Button,
@@ -72,7 +71,7 @@ pub struct Log {
 
 impl Log {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = Page::new();
+        let root = adw::PreferencesPage::new();
 
         // --- the panel: recording state, Record, and what was delivered ---
         let record_content = adw::ButtonContent::builder()

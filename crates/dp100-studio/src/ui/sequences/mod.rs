@@ -25,7 +25,6 @@ use gtk::{gio, glib};
 
 use super::ctx::Ctx;
 use super::log::clock;
-use super::page::{Columns, Page};
 use super::panel::{Panel, Tone, figure, footer};
 use crate::seq::exec::{Outcome, Status};
 use crate::seq::schema::{Cmp, Dur, Metric, OnAbort, OnTimeout, RampTarget, Sequence, Step};
@@ -162,22 +161,13 @@ struct Figure {
 }
 
 pub struct Sequences {
-    pub root: Page,
+    pub root: adw::PreferencesPage,
     /// For the main window's panel while a sequence runs: what it is
     /// doing, how far along it is, and Stop.
     pub card: gtk::Box,
     card_title: gtk::Label,
     card_now: gtk::Label,
     card_progress: gtk::ProgressBar,
-    columns: Columns,
-    /// Beside the steps on a wide window: the step being edited, or a
-    /// note saying to pick one.
-    editor_slot: gtk::Box,
-    /// The step in the editor beside the list: where it is, what it held
-    /// when opened, and whether it was only just added.
-    editing: RefCell<Option<(usize, Step, bool)>>,
-    /// The window is narrow, so steps open in a dialog instead.
-    narrow: Cell<bool>,
     panel: Panel,
     run: gtk::Button,
     run_content: adw::ButtonContent,
@@ -208,7 +198,7 @@ pub struct Sequences {
 
 impl Sequences {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let root = Page::new();
+        let root = adw::PreferencesPage::new();
 
         // --- the run panel ---
         let run_content = adw::ButtonContent::builder()
@@ -314,9 +304,6 @@ impl Sequences {
         let pg = adw::PreferencesGroup::new();
         pg.add(&panel.root);
         root.add(&pg);
-        // The steps on the left; the step being edited and the sequence's
-        // settings on the right.
-        let columns = Columns::new(&root);
 
         // --- steps ---
         let add_menu = gio::Menu::new();
@@ -348,11 +335,7 @@ impl Sequences {
             .description("Run top to bottom; click a step to change it")
             .header_suffix(&add)
             .build();
-        columns.left.append(&steps_group);
-        let editor_slot = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        columns.right.append(&editor_slot);
+        root.add(&steps_group);
 
         // --- settings ---
         let sg = adw::PreferencesGroup::builder().title("Settings").build();
@@ -385,7 +368,7 @@ impl Sequences {
         sg.add(&name);
         sg.add(&on_abort);
         sg.add(&limits);
-        columns.right.append(&sg);
+        root.add(&sg);
 
         let delete = gtk::Button::builder()
             .label("Delete Sequence")
@@ -394,7 +377,7 @@ impl Sequences {
             .build();
         let dg = adw::PreferencesGroup::new();
         dg.add(&delete);
-        columns.right.append(&dg);
+        root.add(&dg);
 
         let editors: Vec<gtk::Widget> = vec![
             picker.clone().upcast(),
@@ -457,10 +440,6 @@ impl Sequences {
             card_title,
             card_now,
             card_progress,
-            columns,
-            editor_slot,
-            editing: RefCell::new(None),
-            narrow: Cell::new(false),
             panel,
             run,
             run_content,
@@ -499,7 +478,7 @@ impl Sequences {
             })
             .build();
         actions.add_action_entries([add_action]);
-        p.root.widget().insert_action_group("seq", Some(&actions));
+        p.root.insert_action_group("seq", Some(&actions));
 
         let w = Rc::downgrade(&p);
         p.picker_list.connect_row_activated(move |_, row| {
@@ -580,7 +559,6 @@ impl Sequences {
 
         seed(&sequences_dir());
         p.reload(None);
-        p.close_editor();
         p
     }
 
@@ -588,26 +566,8 @@ impl Sequences {
         self.running.get()
     }
 
-    pub fn narrow_layout(self: &Rc<Self>, bp: &adw::Breakpoint) {
+    pub fn narrow_layout(&self, bp: &adw::Breakpoint) {
         self.panel.narrow_layout(bp, Some(self.run.upcast_ref()));
-        self.columns.narrow_layout(bp);
-        // Stacked, the editor would sit far below the step it edits, so a
-        // narrow window edits steps in a dialog.
-        let w = Rc::downgrade(self);
-        bp.connect_apply(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.narrow.set(true);
-                p.close_editor();
-                p.editor_slot.set_visible(false);
-            }
-        });
-        let w = Rc::downgrade(self);
-        bp.connect_unapply(move |_| {
-            if let Some(p) = w.upgrade() {
-                p.narrow.set(false);
-                p.editor_slot.set_visible(true);
-            }
-        });
     }
 
     // ---- files ----
@@ -798,82 +758,10 @@ impl Sequences {
             self.steps_group.add(&row);
             rows.push(row.upcast());
         }
-        // The editor beside the list stays open while its step does.
-        let stale = self
-            .editing
-            .borrow()
-            .as_ref()
-            .is_some_and(|(k, st, _)| steps.get(*k) != Some(st));
         drop(doc);
         *self.step_rows.borrow_mut() = rows;
-        if stale {
-            self.close_editor();
-        } else {
-            self.mark_editing();
-        }
         self.mark_current();
         self.refresh_checks();
-    }
-
-    /// Shows the note in place of a step editor.
-    fn close_editor(&self) {
-        self.editing.replace(None);
-        while let Some(c) = self.editor_slot.first_child() {
-            self.editor_slot.remove(&c);
-        }
-        let g = adw::PreferencesGroup::builder().title("Step").build();
-        g.add(
-            &adw::ActionRow::builder()
-                .title("Click a step to change it here")
-                .css_classes(["dim-label"])
-                .build(),
-        );
-        self.editor_slot.append(&g);
-        self.mark_editing();
-    }
-
-    /// Opens step `k` in the editor beside the list.
-    fn open_editor(self: &Rc<Self>, k: usize, step: Step, is_new: bool) {
-        let (legend, _) = chip(&step);
-        let title = if is_new {
-            format!("New {} Step", titlecase(legend))
-        } else {
-            format!("Step {} · {}", k + 1, titlecase(legend))
-        };
-        let w = Rc::downgrade(self);
-        let save = move |new: Step| {
-            if let Some(p) = w.upgrade() {
-                // Recorded first, so the refresh that follows the save
-                // keeps the editor open on what was saved.
-                p.editing.replace(Some((k, new.clone(), false)));
-                p.edit(|s| s.steps[k] = new.clone());
-                p.open_editor(k, new, false);
-            }
-        };
-        let w = Rc::downgrade(self);
-        let saved = step.clone();
-        let back_out = move || {
-            if let Some(p) = w.upgrade() {
-                if is_new {
-                    p.close_editor();
-                    p.discard_new(k);
-                } else {
-                    p.open_editor(k, saved.clone(), false);
-                }
-            }
-        };
-        let group = editor::inline(&title, &step, is_new, save, back_out);
-        self.editing.replace(Some((k, step, is_new)));
-        while let Some(c) = self.editor_slot.first_child() {
-            self.editor_slot.remove(&c);
-        }
-        self.editor_slot.append(&group);
-        self.mark_editing();
-    }
-
-    /// Marks the row of the step in the editor.
-    fn mark_editing(&self) {
-        self.mark_current();
     }
 
     fn step_row(
@@ -986,14 +874,12 @@ impl Sequences {
         row
     }
 
-    /// Marks the step a run is on, or the one in the editor, by its number
-    /// in the accent colour.
+    /// Marks the step a run is on by its number in the accent colour.
     fn mark_current(&self) {
         let current = self.current.get().filter(|_| self.running.get());
-        let editing = self.editing.borrow().as_ref().map(|(k, _, _)| *k);
         for (k, r) in self.step_rows.borrow().iter().enumerate() {
             let Some(n) = find_number(r) else { continue };
-            let on = Some(k) == current || Some(k) == editing;
+            let on = Some(k) == current;
             for class in ["accent", "heading"] {
                 if on {
                     n.add_css_class(class);
@@ -1213,10 +1099,6 @@ impl Sequences {
         if matches!(step, Step::End) {
             return;
         }
-        if !self.narrow.get() {
-            self.open_editor(k, step, is_new);
-            return;
-        }
         let (legend, _) = chip(&step);
         let title = if is_new {
             format!("New {} Step", titlecase(legend))
@@ -1298,9 +1180,7 @@ impl Sequences {
                 f.tile.add_css_class(f.class);
             }
         }
-        self.editor_slot.set_sensitive(!on);
         if on {
-            self.close_editor();
             self.run_content.set_label("Stop");
             self.run_content
                 .set_icon_name("media-playback-stop-symbolic");
